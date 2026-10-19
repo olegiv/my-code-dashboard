@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/olegiv/my-code-dashboard/internal/model"
 	"github.com/olegiv/my-code-dashboard/internal/provider"
@@ -131,6 +132,15 @@ func validateBackupRecords[T any](db *sql.DB, query string, relational func(T) [
 		var record *T
 		if !text || json.Unmarshal([]byte(raw), &record) != nil || record == nil {
 			return errors.New("backup has invalid application records")
+		}
+		// Restored rows are installed verbatim: enforce the finding-field
+		// allowlist even for properties ignored by the ordinary typed decoder.
+		if _, finding := any(record).(*model.Finding); finding {
+			decoder := json.NewDecoder(strings.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(record) != nil {
+				return errors.New("backup has invalid finding fields")
+			}
 		}
 		expected := relational(*record)
 		if len(expected) == 0 || expected[0] == "" || !slices.Equal(expected, values[1:]) {

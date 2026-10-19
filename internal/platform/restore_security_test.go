@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -488,6 +490,108 @@ func TestRestoreSelectionWithJSONAliases(t *testing.T) {
 			}
 			if err = store.ValidateBackup(backup); err != nil {
 				t.Fatalf("selection left a non-restorable database: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestoreRejectsUnknownFindingFields(t *testing.T) {
+	for _, tc := range []struct{ name, mutation string }{
+		{"raw response", `UPDATE findings SET data=json_set(data,'$.raw_response',json('{"secret":"synthetic-sensitive-value"}'))`},
+		{"source snippet", `UPDATE findings SET data=json_set(data,'$.source_snippet','synthetic-sensitive-value')`},
+		{"literal secret", `UPDATE findings SET data=json_set(data,'$.secret','synthetic-sensitive-value')`},
+		{"sensitive field name", `UPDATE findings SET data=json_set(data,'$.synthetic-sensitive-key','synthetic-sensitive-value')`},
+		{"escaped unknown field", `UPDATE findings SET data=substr(data,1,length(data)-1)||',"se\u0063ret":"synthetic-sensitive-value"}'`},
+		{"null", `UPDATE findings SET data='null'`},
+		{"malformed", `UPDATE findings SET data='{'`},
+		{"trailing document", `UPDATE findings SET data=data||' {}'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := restoreSecurityArchive(t, tc.mutation)
+			dir, identity := restoreSecurityDestination(t)
+			path := filepath.Join(dir, "dashboard.sqlite")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = Restore(dir, archive)
+			if err == nil {
+				t.Fatal("finding JSON outside the supported schema was installed")
+			}
+			if strings.Contains(err.Error(), "synthetic-sensitive") {
+				t.Fatal("validation error exposed imported finding data")
+			}
+			after, readErr := os.ReadFile(path)
+			settings, settingsErr := store.ReadSettings(path)
+			copies, globErr := filepath.Glob(filepath.Join(dir, "before-restore-*"))
+			extracted, extractErr := filepath.Glob(filepath.Join(dir, "restore-*"))
+			if readErr != nil || settingsErr != nil || globErr != nil || extractErr != nil || !bytes.Equal(before, after) || settings.InstallationID != identity || len(copies) != 0 || len(extracted) != 0 {
+				t.Fatal("invalid finding JSON changed the destination or left import files")
+			}
+		})
+	}
+}
+
+func TestRestorePreservesSupportedFindingFields(t *testing.T) {
+	const metadata = `UPDATE findings SET data=json_set(data,
+		'$.title','Synthetic finding','$.native_severity','CRITICAL',
+		'$.native_resolution','not_applicable','$.diagnostic_severity','warning',
+		'$.url','https://attacker.example/example/synthetic/-/security/vulnerabilities/1',
+		'$.package','example/module','$.identifiers',json('["CVE-2099-0001"]'),
+		'$.scanner','synthetic-scanner','$.scope','main','$.commit','synthetic-commit');`
+	for _, tc := range []struct{ name, mutation string }{
+		{"canonical", ""},
+		{"case alias", `UPDATE findings SET data=json_set(data,'$.TITLE','Synthetic finding')`},
+		{"escaped known field", `UPDATE findings SET data=substr(data,1,length(data)-1)||',"ti\u0074le":"Synthetic finding"}'`},
+		{"whitespace", "UPDATE findings SET data=' '||data||char(10)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := restoreSecurityArchive(t, metadata+tc.mutation)
+			dir, identity := restoreSecurityDestination(t)
+			path := filepath.Join(dir, "dashboard.sqlite")
+			if err := Restore(dir, archive); err != nil {
+				t.Fatal("supported finding JSON was rejected", err)
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			settings, settingsErr := s.Settings()
+			repos, repoErr := s.Repositories()
+			connections, connectionErr := s.Connections()
+			findings, findingErr := s.Findings()
+			if settingsErr != nil || repoErr != nil || connectionErr != nil || findingErr != nil || settings.InstallationID != identity || len(repos) != 1 || !repos[0].Selected || len(connections) != 1 || !connections[0].ReconnectRequired || len(findings) != 1 {
+				t.Fatal("valid restore lost identity, selection, quarantine or findings")
+			}
+			f := findings[0]
+			if f.ID != "synthetic-finding" || f.RepositoryID != repos[0].ID || f.Source != "fixture" || f.Category != "code" || f.Title != "Synthetic finding" || f.State != "open" || f.Severity != "critical" || f.NativeState != "DETECTED" || f.NativeSeverity != "CRITICAL" || f.NativeResolution != "not_applicable" || f.DiagnosticSeverity != "warning" || f.URL != "https://attacker.example/example/synthetic/-/security/vulnerabilities/1" || f.Package != "example/module" || !reflect.DeepEqual(f.Identifiers, []string{"CVE-2099-0001"}) || f.Scanner != "synthetic-scanner" || f.Scope != "main" || f.Commit != "synthetic-commit" || f.SeenAt.IsZero() || f.Missing {
+				t.Fatal("supported finding fields changed during restore")
+			}
+			var exported bytes.Buffer
+			if err = Export(t.Context(), s, &exported, "test"); err != nil {
+				t.Fatal(err)
+			}
+			archive = filepath.Join(t.TempDir(), "roundtrip.tar.gz")
+			if err = os.WriteFile(archive, exported.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			roundtrip := t.TempDir()
+			if err = Restore(roundtrip, archive); err != nil {
+				t.Fatal("subsequent backup is not restorable", err)
+			}
+			restored, err := store.Open(filepath.Join(roundtrip, "dashboard.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			again, err := restored.Findings()
+			if err != nil || !reflect.DeepEqual(findings, again) {
+				t.Fatal("subsequent backup lost supported finding metadata", err)
+			}
+			credentials, calls := refreshRestoredSelection(t, s)
+			if credentials.reads != 0 || calls != 0 {
+				t.Fatal("restored finding bypassed credential quarantine")
 			}
 		})
 	}
