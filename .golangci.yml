@@ -1,0 +1,88 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+version: "2"
+run:
+  tests: true
+linters:
+  default: none
+  enable:
+    - dupl
+    - errcheck
+    - errorlint
+    - gocritic
+    - gocyclo
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+  settings:
+    dupl:
+      threshold: 200
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    gocritic:
+      enabled-checks:
+        - boolExprSimplify
+        - emptyStringTest
+        - evalOrder
+        - nilValReturn
+        - regexpPattern
+        - truncateCmp
+        - unnecessaryBlock
+        - weakCond
+    gocyclo:
+      min-complexity: 55
+    revive:
+      rules:
+        - name: import-shadowing
+          severity: warning
+          disabled: false
+        - name: exported
+          severity: warning
+          disabled: false
+          arguments:
+            - "checkPrivateReceivers"
+            - "sayRepetitiveInsteadOfStutters"
+    unconvert:
+      fast-math: false
+      safe: false
+    unparam:
+      check-exported: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gocyclo
+        path: _test\.go
+      - linters:
+          - staticcheck
+        text: 'SA9003:'
+    paths:
+      - .*\.sql\.go$
+      - output
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

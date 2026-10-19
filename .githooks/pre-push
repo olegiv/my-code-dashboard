@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+head_sha=$(git rev-parse HEAD)
+pushing=false
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  if [[ -z $local_sha || $local_sha =~ ^0+$ ]]; then
+    continue
+  fi
+  if [[ $(git rev-parse "$local_sha^{commit}") != "$head_sha" ]]; then
+    echo "pre-push: $local_ref is not the checked-out commit; check it out before pushing." >&2
+    exit 1
+  fi
+  pushing=true
+done
+if ! $pushing; then
+  exit 0
+fi
+if ! git diff --quiet -- || ! git diff --cached --quiet HEAD -- || [[ -n $(git ls-files --others --exclude-standard) ]]; then
+  echo 'pre-push: tracked or untracked changes would differ from the pushed commit.' >&2
+  exit 1
+fi
+exec bash scripts/test-gate.sh

@@ -1,0 +1,1198 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package engine
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/olegiv/my-code-dashboard/internal/model"
+	"github.com/olegiv/my-code-dashboard/internal/provider"
+	"github.com/olegiv/my-code-dashboard/internal/secret"
+	"github.com/olegiv/my-code-dashboard/internal/store"
+)
+
+func TestRefreshResumesInterruptedPortfolio(t *testing.T) {
+	for _, mode := range []string{"normal", "manual restart", "scheduled restart", "changed selection"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakeProvider{}
+			e, connection := engineFixture(t, t.Context(), p)
+			if err := e.Store.SaveDiscovered(connection, []model.Repository{
+				{ExternalID: "1", Name: "example/a"},
+				{ExternalID: "2", Name: "example/b"},
+				{ExternalID: "3", Name: "example/c"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			repos, _ := e.Store.Repositories()
+			selection := map[string]bool{}
+			snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "observed"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}
+			for _, repo := range repos {
+				selection[repo.ID] = true
+				if err := e.Store.Apply(repo, snapshot, e.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := e.Store.SelectRepositories(selection); err != nil {
+				t.Fatal(err)
+			}
+			var calls []string
+			p.collect = func(ctx context.Context, repo model.Repository) []model.Snapshot {
+				calls = append(calls, repo.Name)
+				if mode != "normal" {
+					<-ctx.Done()
+					return []model.Snapshot{{Coverage: model.Coverage{Category: "code", Collection: "error", Note: "Synthetic deadline."}}}
+				}
+				return []model.Snapshot{snapshot}
+			}
+			// An inherited deadline exercises the same interruption path as the
+			// 30-minute budget, without waiting 30 minutes or calling a provider.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			e.ctx = ctx
+			if _, _, err := e.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			e.Wait()
+			settings, _ := e.Store.Settings()
+			raw, _ := json.Marshal(settings)
+			var saved map[string]any
+			_ = json.Unmarshal(raw, &saved)
+			cursor, _ := saved["resume_after_repository_id"].(string)
+			runs, _ := e.Store.Runs()
+			if mode == "normal" {
+				if !slices.Equal(calls, []string{"example/a", "example/b", "example/c"}) || cursor != "" || runs[0].Status != "success" {
+					t.Fatal("normal portfolio order/completion changed", calls, cursor, runs)
+				}
+			} else if !slices.Equal(calls, []string{"example/a"}) || cursor != repos[0].ID || runs[0].Status != "interrupted" {
+				t.Error("interruption did not checkpoint the attempted repository", calls, cursor, runs[0].Status)
+			}
+			findings, _ := e.Store.Findings()
+			if len(findings) != 3 {
+				t.Fatal("interrupted refresh lost prior findings")
+			}
+			for _, finding := range findings {
+				if finding.State != "open" || finding.Missing {
+					t.Fatal("interrupted or unprocessed findings changed", finding)
+				}
+			}
+			if mode == "changed selection" {
+				delete(selection, repos[1].ID)
+				if err := e.Store.SelectRepositories(selection); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backup := filepath.Join(t.TempDir(), "backup.sqlite")
+			if err := e.Store.Backup(t.Context(), backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ValidateBackup(backup); err != nil {
+				t.Fatal("refresh progress made a valid installation unrestorable", err)
+			}
+			path := e.Store.Path
+			if err := e.Store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			next := New(t.Context(), reopened, e.Secrets, false)
+			now := e.Now().Add(time.Hour)
+			next.Now = func() time.Time { return now }
+			calls = nil
+			p.collect = func(_ context.Context, repo model.Repository) []model.Snapshot {
+				calls = append(calls, repo.Name)
+				return []model.Snapshot{snapshot}
+			}
+			next.Factory = func(model.Connection, string) (provider.Provider, error) { return p, nil }
+			if mode == "scheduled restart" {
+				err = next.Tick(now)
+			} else {
+				_, _, err = next.Start("manual")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			next.Wait()
+			want := []string{"example/b", "example/c", "example/a"}
+			switch mode {
+			case "normal":
+				want = []string{"example/a", "example/b", "example/c"}
+			case "changed selection":
+				want = []string{"example/c", "example/a"}
+			}
+			if !slices.Equal(calls, want) {
+				t.Errorf("restart did not visit the pending tail first: got %v, want %v", calls, want)
+			}
+			settings, _ = reopened.Settings()
+			raw, _ = json.Marshal(settings)
+			clear(saved)
+			_ = json.Unmarshal(raw, &saved)
+			if cursor, _ = saved["resume_after_repository_id"].(string); cursor != "" {
+				t.Fatal("complete refresh did not clear its resume cursor")
+			}
+			calls = nil
+			if _, _, err = next.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			next.Wait()
+			if mode == "changed selection" {
+				want = []string{"example/a", "example/c"}
+			} else {
+				want = []string{"example/a", "example/b", "example/c"}
+			}
+			if !slices.Equal(calls, want) {
+				t.Fatal("completed portfolios did not return to ordinary ordering", calls)
+			}
+		})
+	}
+	for _, mode := range []string{"removed cursor", "deselected cursor", "empty selection", "independent installation"} {
+		t.Run(mode, func(t *testing.T) {
+			e, c := engineFixture(t, t.Context(), &fakeProvider{})
+			if err := e.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "1", Name: "example/a"}, {ExternalID: "2", Name: "example/b"}}); err != nil {
+				t.Fatal(err)
+			}
+			repos, err := e.Store.Repositories()
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected := map[string]bool{repos[0].ID: true, repos[1].ID: true}
+			cursor := repos[1].ID
+			want := []string{"example/a", "example/b"}
+			switch mode {
+			case "removed cursor":
+				cursor = "removed-repository"
+			case "deselected cursor":
+				delete(selected, cursor)
+				want = []string{"example/a"}
+			case "empty selection":
+				clear(selected)
+				want = nil
+			case "independent installation":
+				other, _ := engineFixture(t, t.Context(), &fakeProvider{})
+				if err = other.saveRefreshResume(repos[0].ID); err != nil {
+					t.Fatal(err)
+				}
+				cursor = ""
+			}
+			if err = e.Store.SelectRepositories(selected); err != nil {
+				t.Fatal(err)
+			}
+			if err = e.saveRefreshResume(cursor); err != nil {
+				t.Fatal(err)
+			}
+			ordered, err := e.refreshRepositories()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, repo := range ordered {
+				names = append(names, repo.Name)
+			}
+			if !slices.Equal(names, want) {
+				t.Fatal("cursor leaked across selection or installation boundaries", names, want)
+			}
+		})
+	}
+}
+
+type fakeProvider struct {
+	block, started chan struct{}
+	failure        error
+	retryAt        time.Time
+	snapshots      []model.Snapshot
+	metadata       func(model.Repository) (model.Repository, error)
+	collect        func(context.Context, model.Repository) []model.Snapshot
+}
+
+func (f *fakeProvider) Validate(context.Context) (provider.Identity, error) {
+	return provider.Identity{Name: "synthetic-user", Version: "synthetic"}, f.failure
+}
+func (f *fakeProvider) Discover(context.Context) ([]model.Repository, error) {
+	return []model.Repository{{ExternalID: "1", Name: "example/repo", DefaultBranch: "main"}}, f.failure
+}
+func (f *fakeProvider) RefreshRepository(ctx context.Context, r model.Repository) (model.Repository, error) {
+	if f.started != nil {
+		f.started <- struct{}{}
+	}
+	if f.block != nil {
+		select {
+		case <-ctx.Done():
+			return r, ctx.Err()
+		case <-f.block:
+		}
+	}
+	if f.metadata != nil {
+		return f.metadata(r)
+	}
+	return r, nil
+}
+
+func TestInvalidMetadataRetainsFindingsAndValidBackups(t *testing.T) {
+	for _, mode := range []string{"provider rejection", "store rejection", "normal rename"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakeProvider{metadata: func(r model.Repository) (model.Repository, error) {
+				r.Name = "example/renamed"
+				switch mode {
+				case "provider rejection":
+					return r, &provider.Error{Kind: "error", Message: "Incomplete repository metadata."}
+				case "store rejection":
+					r.ExternalID = "0"
+				}
+				return r, nil
+			}}
+			e, _ := engineFixture(t, t.Context(), p)
+			repos, _ := e.Store.Repositories()
+			before := repos[0]
+			if err := e.Store.Apply(before, model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "1", Source: "synthetic", Title: "Retained active finding", State: "open", NativeState: "open"}}}, e.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := e.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			e.Wait()
+			fresh, err := e.Store.Repository(before.ID)
+			if err != nil || fresh.ExternalID != before.ExternalID {
+				t.Fatal("refresh corrupted the repository identity")
+			}
+			findings, _ := e.Store.Findings()
+			runs, _ := e.Store.Runs()
+			if mode == "normal rename" {
+				if fresh.Name != "example/renamed" || runs[0].Succeeded != 1 || runs[0].Failed != 0 || !findings[0].Missing {
+					t.Fatal("valid metadata did not reach ordinary collection")
+				}
+			} else if fresh != before || len(findings) != 1 || findings[0].Missing || findings[0].State != "open" || runs[0].Failed != len(model.Categories) || runs[0].Outcomes[0].RepositoryName != before.Name {
+				t.Fatal("metadata failure replaced prior findings or activity identity")
+			}
+			path := filepath.Join(t.TempDir(), "backup.sqlite")
+			if err = e.Store.Backup(t.Context(), path); err != nil {
+				t.Fatal(err)
+			}
+			if err = store.ValidateBackup(path); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+func (f *fakeProvider) Collect(ctx context.Context, r model.Repository) []model.Snapshot {
+	if f.collect != nil {
+		return f.collect(ctx, r)
+	}
+	if f.snapshots != nil {
+		return f.snapshots
+	}
+	if f.failure != nil {
+		return []model.Snapshot{{Coverage: model.Coverage{Category: "code", Collection: "rate_limited", RetryAt: f.retryAt}}}
+	}
+	return []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "unknown"}}}
+}
+
+type delayedDiscovery struct {
+	*fakeProvider
+	started, release chan struct{}
+	discoveryErr     error
+}
+
+func (p delayedDiscovery) Discover(ctx context.Context) ([]model.Repository, error) {
+	close(p.started)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+		return []model.Repository{{ExternalID: "stale-only", Name: "synthetic/stale-only"}}, p.discoveryErr
+	}
+}
+
+func TestDiscoveryDoesNotOverwriteChangedCredentials(t *testing.T) {
+	for _, mutation := range []string{"reconnect", "forget", "unchanged"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failure=%t", mutation, failed), func(t *testing.T) {
+				e, c := engineFixture(t, context.Background(), &fakeProvider{})
+				p := delayedDiscovery{fakeProvider: &fakeProvider{}, started: make(chan struct{}), release: make(chan struct{})}
+				if failed {
+					p.discoveryErr = errors.New("synthetic discovery failure")
+				}
+				e.Factory = func(model.Connection, string) (provider.Provider, error) { return p, nil }
+				done := make(chan error, 1)
+				go func() { done <- e.Discover(t.Context(), c.ID) }()
+				<-p.started
+				switch mutation {
+				case "reconnect":
+					c.Name = "Replacement connection"
+					if err := e.Connect(t.Context(), c, "synthetic replacement"); err != nil {
+						t.Fatal(err)
+					}
+				case "forget":
+					if err := e.ForgetCredential(c.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				close(p.release)
+				discoveryErr := <-done
+				stored, err := e.Store.Connection(c.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				repos, _ := e.Store.Repositories()
+				switch mutation {
+				case "reconnect":
+					if stored.Name != c.Name || stored.Identity != "synthetic-user" || stored.Version != "synthetic" || stored.Status != "connected" || !strings.Contains(stored.Message, "Validated") {
+						t.Fatal("discovery overwrote the newly validated connection")
+					}
+				case "forget":
+					if stored.Status != "disconnected" || !strings.Contains(stored.Message, "Connection disconnected.") {
+						t.Fatal("discovery overwrote credential removal")
+					}
+				}
+				switch {
+				case mutation != "unchanged":
+					if discoveryErr == nil || len(repos) != 1 {
+						t.Fatal("stale discovery results were not discarded")
+					}
+				case failed:
+					if discoveryErr == nil || stored.Status != "error" || len(repos) != 1 {
+						t.Fatal("ordinary discovery failure lost its status")
+					}
+				default:
+					if discoveryErr != nil || stored.Status != "connected" || len(repos) != 2 {
+						t.Fatal("unchanged connection did not accept normal discovery")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRefreshDiscardsResultsAfterCredentialChanges(t *testing.T) {
+	for _, stage := range []string{"metadata", "findings"} {
+		for _, mutation := range []string{"reconnect", "forget", "unchanged"} {
+			t.Run(stage+"/"+mutation, func(t *testing.T) {
+				p := &fakeProvider{}
+				e, c := engineFixture(t, t.Context(), p)
+				if err := e.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "2", Name: "example/second"}}); err != nil {
+					t.Fatal(err)
+				}
+				other := model.Connection{ID: "independent", Provider: "github", BaseURL: "https://github.com"}
+				if err := e.Store.SaveConnection(other); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Secrets.Set(other.ID, "synthetic-independent"); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Store.SaveDiscovered(other, []model.Repository{{ExternalID: "3", Name: "zzz/independent"}}); err != nil {
+					t.Fatal(err)
+				}
+				e.Factory = func(connection model.Connection, _ string) (provider.Provider, error) {
+					if connection.ID == other.ID {
+						return &fakeProvider{}, nil
+					}
+					return p, nil
+				}
+				repos, err := e.Store.Repositories()
+				if err != nil {
+					t.Fatal(err)
+				}
+				selection := map[string]bool{}
+				before := e.Now().Add(-time.Hour)
+				for _, repo := range repos {
+					selection[repo.ID] = true
+					if err = e.Store.Apply(repo, model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code", Note: "Previous complete report", AnalysisAt: before, Ref: "main", Commit: "prior"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}, before); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err = e.Store.SelectRepositories(selection); err != nil {
+					t.Fatal(err)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				t.Cleanup(func() {
+					select {
+					case <-release:
+					default:
+						close(release)
+					}
+					e.Wait()
+				})
+				metadataCalls, findingCalls := 0, 0
+				p.metadata = func(repo model.Repository) (model.Repository, error) {
+					metadataCalls++
+					if stage == "metadata" && metadataCalls == 1 {
+						close(started)
+						<-release
+					}
+					repo.Name += "/renamed"
+					return repo, nil
+				}
+				p.collect = func(context.Context, model.Repository) []model.Snapshot {
+					findingCalls++
+					if stage == "findings" && findingCalls == 1 {
+						close(started)
+						<-release
+					}
+					return []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "new", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}}
+				}
+				if _, _, err = e.Start("manual"); err != nil {
+					t.Fatal(err)
+				}
+				<-started
+				switch mutation {
+				case "reconnect":
+					c.Name = "Replacement connection"
+					err = e.Connect(t.Context(), c, "synthetic-replacement")
+				case "forget":
+					err = e.ForgetCredential(c.ID)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				e.Wait()
+				changed := mutation != "unchanged"
+				runs, err := e.Store.Runs()
+				if err != nil || len(runs) != 1 {
+					t.Fatal("refresh activity missing", err)
+				}
+				if changed {
+					if metadataCalls != 1 || findingCalls != map[string]int{"metadata": 0, "findings": 1}[stage] || runs[0].Succeeded != 1 || runs[0].Failed != 2*len(model.Categories) || len(runs[0].Attention()) != 2*len(model.Categories) {
+						t.Fatalf("stale provider reused or successful results recorded: metadata=%d findings=%d run=%+v", metadataCalls, findingCalls, runs[0])
+					}
+					for _, outcome := range runs[0].Attention() {
+						if outcome.Collection != "error" || !strings.Contains(outcome.Reason, "Connection changed during refresh") {
+							t.Fatal("discard reason missing from activity", outcome)
+						}
+					}
+				} else if metadataCalls != 2 || findingCalls != 2 || runs[0].Succeeded != 3 || runs[0].Failed != 0 {
+					t.Fatal("normal refresh did not complete", runs[0])
+				}
+				coverage, err := e.Store.Coverage()
+				if err != nil || len(coverage) != len(repos) {
+					t.Fatal("complete coverage records were lost or replaced", err)
+				}
+				for _, item := range coverage {
+					if changed && (item.RepositoryID == repos[0].ID || item.RepositoryID == repos[1].ID) && (!item.LastSuccess.Equal(before) || !item.LastAttempt.Equal(before) || !item.AnalysisAt.Equal(before) || item.Note != "Previous complete report" || item.Ref != "main" || item.Commit != "prior") {
+						t.Fatal("discarded refresh changed complete coverage", item)
+					}
+				}
+				findings, err := e.Store.Findings()
+				wantFindings := len(repos)
+				if !changed {
+					wantFindings += 2
+				}
+				if err != nil || len(findings) != wantFindings {
+					t.Fatal("active baseline findings were lost or stale results imported", err)
+				}
+				for _, finding := range findings {
+					if changed && (finding.RepositoryID == repos[0].ID || finding.RepositoryID == repos[1].ID) && (finding.ID != "retained" || finding.Missing || finding.NativeState != "DETECTED") {
+						t.Fatal("discarded findings changed the active baseline", finding)
+					}
+				}
+				fresh, err := e.Store.Repository(repos[0].ID)
+				if err != nil || changed && stage == "metadata" && fresh.Name != repos[0].Name {
+					t.Fatal("stale repository metadata was saved", fresh, err)
+				}
+				if changed {
+					if mutation == "forget" {
+						if err = e.Connect(t.Context(), c, "synthetic-replacement"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, _, err = e.Start("manual"); err != nil {
+						t.Fatal(err)
+					}
+					e.Wait()
+					runs, _ = e.Store.Runs()
+					if len(runs) != 2 || runs[0].Succeeded+runs[1].Succeeded != 4 || runs[0].Failed+runs[1].Failed != 2*len(model.Categories) {
+						t.Fatal("fresh refresh did not use the current connection", runs)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRefreshRecordsCoverageGapsAndRetriesOnlyFailures(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "coverage gaps", true: "actual failure"}[failure], func(t *testing.T) {
+			p := &fakeProvider{snapshots: []model.Snapshot{
+				{Complete: true, Coverage: model.Coverage{Category: "dependencies", Note: "Empty report imported."}},
+				{Coverage: model.Coverage{Category: "code", Collection: "no_analysis", ScannerState: "not_observed", Note: "No analysis for the default branch."}},
+				{Coverage: model.Coverage{Category: "secrets", Collection: "disabled", ScannerState: "disabled", Note: "Scanner disabled at the provider."}},
+				{Coverage: model.Coverage{Category: "containers", Collection: "unsupported", Note: "No dedicated source."}},
+			}}
+			if failure {
+				p.snapshots = append(p.snapshots, model.Snapshot{Coverage: model.Coverage{Category: "dast", Collection: "denied", Note: "Read access denied."}})
+			}
+			e, _ := engineFixture(t, context.Background(), p)
+			if err := e.Tick(e.Now()); err != nil {
+				t.Fatal(err)
+			}
+			e.Wait()
+			runs, err := e.Store.Runs()
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("run not persisted: %+v %v", runs, err)
+			}
+			run := runs[0]
+			wantStatus, wantFailed := "coverage_gaps", 0
+			if failure {
+				wantStatus, wantFailed = "partial", 1
+			}
+			if run.Status != wantStatus || run.Succeeded != 1 || run.Failed != wantFailed || run.Disabled != 1 || run.NoAnalysis != 1 || run.Unsupported != 1 || !run.DetailsRecorded || len(run.Outcomes) != len(p.snapshots) || len(run.Attention()) != 2+wantFailed {
+				t.Fatalf("incorrect totals/outcomes: %+v", run)
+			}
+			repos, _ := e.Store.Repositories()
+			for i, outcome := range run.Outcomes {
+				if outcome.RepositoryID != repos[0].ID || outcome.RepositoryName != "example/repo" || outcome.Provider != "github" || outcome.Category != p.snapshots[i].Coverage.Category || outcome.Reason != p.snapshots[i].Coverage.Note {
+					t.Fatalf("outcome lost its context: %+v", outcome)
+				}
+			}
+			settings, _ := e.Store.Settings()
+			if failure {
+				if settings.Attempts != 1 || settings.RetryAt.IsZero() {
+					t.Fatal("actual failure did not schedule a bounded retry")
+				}
+			} else {
+				if settings.Attempts != 3 || !settings.RetryAt.IsZero() {
+					t.Fatal("coverage gaps scheduled unnecessary retries")
+				}
+				if err = e.Tick(e.Now().Add(time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+				e.Wait()
+				runs, _ = e.Store.Runs()
+				if len(runs) != 1 {
+					t.Fatal("coverage gaps retried in the same daily slot")
+				}
+			}
+			// Later successful imports and a rename must not rewrite old activity.
+			repo := repos[0]
+			repo.Name = "example/renamed"
+			if err = e.Store.SaveRepository(repo); err != nil {
+				t.Fatal(err)
+			}
+			p.snapshots = []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "observed", Note: "Later import succeeded."}}}
+			next := e.Now().Add(2 * time.Hour)
+			e.Now = func() time.Time { return next }
+			if _, _, err = e.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			e.Wait()
+			runs, _ = e.Store.Runs()
+			if len(runs) != 2 || runs[0].Status != "success" || runs[1].Outcomes[1].Reason != "No analysis for the default branch." || runs[1].Outcomes[1].RepositoryName != "example/repo" {
+				t.Fatal("later coverage/rename changed historical activity")
+			}
+		})
+	}
+}
+
+func TestSuccessfulReportWithDisabledScannerIsStillImported(t *testing.T) {
+	p := &fakeProvider{snapshots: []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "disabled", Note: "Historical report remains accessible; scanner is disabled."}, Findings: []model.Finding{{ID: "1", Source: "synthetic", Title: "Historical active finding", State: "open", NativeState: "DETECTED"}}}}}
+	e, _ := engineFixture(t, context.Background(), p)
+	if err := e.Tick(e.Now()); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	runs, _ := e.Store.Runs()
+	findings, _ := e.Store.Findings()
+	if len(runs) != 1 || runs[0].Succeeded != 1 || runs[0].Failed != 0 || runs[0].Status != "coverage_gaps" || len(runs[0].Attention()) != 1 || len(findings) != 1 || findings[0].State != "open" {
+		t.Fatal("disabled scanner metadata prevented a valid historical import or hid its coverage gap")
+	}
+	settings, _ := e.Store.Settings()
+	if settings.Attempts != 3 || !settings.RetryAt.IsZero() {
+		t.Fatal("scanner metadata triggered failure retries")
+	}
+}
+func engineFixture(t *testing.T, ctx context.Context, p *fakeProvider) (*Engine, model.Connection) {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	secrets := secret.NewMemory()
+	e := New(ctx, s, secrets, false)
+	e.Now = func() time.Time { return time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC) }
+	e.Factory = func(model.Connection, string) (provider.Provider, error) { return p, nil }
+	c := model.Connection{ID: "fixture", Provider: "github", Name: "Synthetic", BaseURL: "https://github.com"}
+	if err = s.SaveConnection(c); err != nil {
+		t.Fatal(err)
+	}
+	_ = secrets.Set(c.ID, "synthetic-not-real")
+	if err = s.SaveDiscovered(c, []model.Repository{{ExternalID: "1", Name: "example/repo"}}); err != nil {
+		t.Fatal(err)
+	}
+	repos, _ := s.Repositories()
+	if err = s.SelectRepositories(map[string]bool{repos[0].ID: true}); err != nil {
+		t.Fatal(err)
+	}
+	return e, c
+}
+func TestDSTGapDoesNotReplayPreviousDailySlot(t *testing.T) {
+	e, _ := engineFixture(t, context.Background(), &fakeProvider{})
+	clock, _ := time.Parse(time.RFC3339, "2026-03-29T00:15:00Z")
+	e.Now = func() time.Time { return clock }
+	settings, _ := e.Store.Settings()
+	settings.Hour, settings.Minute = 2, 30
+	settings.LastSlot, _ = time.Parse(time.RFC3339, "2026-03-28T01:30:00Z")
+	settings.Attempts = 3
+	if err := e.Store.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	runs, _ := e.Store.Runs()
+	if len(runs) != 0 {
+		t.Fatal("DST normalization replayed yesterday's consumed slot")
+	}
+	clock, _ = time.Parse(time.RFC3339, "2026-03-29T01:30:00Z")
+	for range 2 {
+		if err := e.Tick(clock); err != nil {
+			t.Fatal(err)
+		}
+		e.Wait()
+	}
+	runs, _ = e.Store.Runs()
+	if len(runs) != 1 || runs[0].Trigger != "scheduled" || runs[0].Status != "success" {
+		t.Fatal("shifted DST slot did not run exactly once")
+	}
+}
+
+func TestRefreshCoalescesAndDoesNotConsumeScheduledSlotWhileBusy(t *testing.T) {
+	p := &fakeProvider{block: make(chan struct{}), started: make(chan struct{}, 1)}
+	e, _ := engineFixture(t, context.Background(), p)
+	first, started, err := e.Start("manual")
+	if err != nil || !started {
+		t.Fatal(err)
+	}
+	<-p.started
+	id, started, err := e.Start("manual")
+	if err != nil || started || id != first {
+		t.Fatal("overlapping refresh was started")
+	}
+	if err = e.Tick(e.Now()); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := e.Store.Settings()
+	if !settings.LastSlot.IsZero() {
+		t.Fatal("busy tick consumed schedule")
+	}
+	close(p.block)
+	e.Wait()
+	if err = e.Tick(e.Now()); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	runs, _ := e.Store.Runs()
+	if len(runs) != 2 {
+		t.Fatal("missed slot was not caught up")
+	}
+	if err = e.Tick(e.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	runs, _ = e.Store.Runs()
+	if len(runs) != 2 {
+		t.Fatal("successful slot ran twice")
+	}
+}
+func TestPersistedRetriesHonorDeadlineAndHaveBound(t *testing.T) {
+	p := &fakeProvider{failure: errors.New("synthetic failure")}
+	e, _ := engineFixture(t, context.Background(), p)
+	now := e.Now()
+	p.retryAt = now.Add(time.Hour)
+	if err := e.Tick(now); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	settings, _ := e.Store.Settings()
+	if settings.Attempts != 1 || !settings.RetryAt.Equal(p.retryAt) {
+		t.Fatalf("retry deadline lost %+v", settings)
+	}
+	// Recreate the engine, retaining only persisted state, as after sleep/restart.
+	resumed := New(context.Background(), e.Store, e.Secrets, false)
+	resumed.Factory = e.Factory
+	clock := now.Add(10 * time.Minute)
+	resumed.Now = func() time.Time { return clock }
+	if err := resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ := e.Store.Runs()
+	if len(runs) != 1 {
+		t.Fatal("restart ignored rate limit deadline")
+	}
+	clock = now.Add(time.Hour)
+	if err := resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	clock = clock.Add(11 * time.Minute)
+	p.retryAt = clock.Add(26 * time.Hour)
+	if err := resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	clock = clock.Add(time.Hour)
+	if err := resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ = e.Store.Runs()
+	if len(runs) != 3 {
+		t.Fatalf("expected three bounded attempts, got %d", len(runs))
+	}
+	settings, _ = e.Store.Settings()
+	if settings.Attempts != 3 {
+		t.Fatal("retry budget not persisted")
+	}
+	clock = now.Add(24 * time.Hour)
+	if err := resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ = e.Store.Runs()
+	if len(runs) != 3 {
+		t.Fatal("new slot ignored a provider deadline received on the final attempt")
+	}
+}
+func TestRetryDeadlineSurvivesNewDailySlot(t *testing.T) {
+	p := &fakeProvider{failure: errors.New("synthetic failure")}
+	e, _ := engineFixture(t, context.Background(), p)
+	settings, _ := e.Store.Settings()
+	location, err := time.LoadLocation(settings.Timezone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Date(2026, 10, 18, settings.Hour, settings.Minute, 0, 0, location).Add(-5 * time.Minute)
+	e.Now = func() time.Time { return clock }
+	p.retryAt = clock.Add(time.Hour)
+	if err = e.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	clock = clock.Add(5 * time.Minute)
+	if err = e.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	runs, _ := e.Store.Runs()
+	if len(runs) != 1 {
+		t.Fatal("new daily slot bypassed outstanding provider retry deadline")
+	}
+	resumed := New(context.Background(), e.Store, e.Secrets, false)
+	resumed.Factory, resumed.Now = e.Factory, e.Now
+	clock = p.retryAt
+	if err = resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ = e.Store.Runs()
+	if len(runs) != 2 {
+		t.Fatal("refresh did not resume when deadline expired")
+	}
+}
+
+func TestManualRefreshPersistsProviderDeadline(t *testing.T) {
+	p := &fakeProvider{failure: errors.New("synthetic rate limit")}
+	e, _ := engineFixture(t, context.Background(), p)
+	clock := e.Now()
+	p.retryAt = clock.Add(26 * time.Hour)
+	if _, started, err := e.Start("manual"); err != nil || !started {
+		t.Fatalf("manual refresh: %v", err)
+	}
+	e.Wait()
+	settings, err := e.Store.Settings()
+	if err != nil || !settings.RetryAt.Equal(p.retryAt) || settings.Attempts != 0 {
+		t.Fatalf("manual refresh lost deadline or consumed schedule budget: %+v, %v", settings, err)
+	}
+	resumed := New(context.Background(), e.Store, e.Secrets, false)
+	resumed.Factory = e.Factory
+	resumed.Now = func() time.Time { return clock }
+	for _, elapsed := range []time.Duration{time.Minute, 24 * time.Hour} {
+		clock = e.Now().Add(elapsed)
+		if err = resumed.Tick(clock); err != nil {
+			t.Fatal(err)
+		}
+		resumed.Wait()
+		runs, _ := e.Store.Runs()
+		if len(runs) != 1 {
+			t.Fatal("scheduler ignored deadline from manual refresh after restart/new slot")
+		}
+	}
+	clock = p.retryAt
+	p.failure = nil
+	if err = resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ := e.Store.Runs()
+	settings, err = e.Store.Settings()
+	if err != nil || len(runs) != 2 || settings.Attempts != 3 || !settings.RetryAt.IsZero() {
+		t.Fatal("scheduled collection did not resume successfully at the deadline")
+	}
+}
+
+func TestHistoryRetentionWithoutRefresh(t *testing.T) {
+	for _, mode := range []string{"preferences", "disabled schedule", "active refresh", "maintenance startup"} {
+		t.Run(mode, func(t *testing.T) {
+			e, _ := engineFixture(t, t.Context(), &fakeProvider{})
+			e.Factory = func(model.Connection, string) (provider.Provider, error) {
+				t.Error("retention maintenance attempted provider access")
+				return nil, errors.New("unexpected provider access")
+			}
+			now := e.Now()
+			repos, _ := e.Store.Repositories()
+			snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}}
+			if err := e.Store.Apply(repos[0], snapshot, now.AddDate(0, 0, -11)); err != nil {
+				t.Fatal(err)
+			}
+			for i, at := range []time.Time{now.AddDate(0, 0, -10), now.AddDate(0, 0, -2), now} {
+				snapshot.Findings = []model.Finding{{ID: fmt.Sprint(i), Source: "fixture", State: "open", NativeState: "open"}}
+				if err := e.Store.Apply(repos[0], snapshot, at); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Store.SaveRun(model.Run{ID: fmt.Sprint(i), StartedAt: at, Status: "success"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			settings, _ := e.Store.Settings()
+			settings.Enabled, settings.ChangesDays, settings.LogsDays = false, 2, 2
+			if mode == "active refresh" {
+				settings.Enabled = true
+			}
+			if mode == "preferences" {
+				if err := e.SavePreferences(settings.Hour, settings.Minute, settings.Timezone, false, 2, 2); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := e.Store.SaveSettings(settings); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "active refresh" {
+					e.active = "synthetic-running-refresh"
+				}
+				if mode == "maintenance startup" {
+					ctx, cancel := context.WithCancel(t.Context())
+					cancel()
+					// Schedule performs maintenance once before its select loop,
+					// including when the caller is already shutting down.
+					e.Schedule(ctx)
+				} else {
+					if err := e.Tick(now); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			runs, runErr := e.Store.Runs()
+			changes, changeErr := e.Store.Changes()
+			if runErr != nil || changeErr != nil || len(runs) != 2 || len(changes) != 2 || runs[1].ID != "1" || changes[1].FindingID != "1" {
+				t.Fatalf("expired history retained or cutoff history lost: runs=%v changes=%v errors=%v/%v", runs, changes, runErr, changeErr)
+			}
+			backup := filepath.Join(t.TempDir(), "after-maintenance.sqlite")
+			if err := e.Store.Backup(t.Context(), backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ValidateBackup(backup); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := store.Open(backup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			runs, runErr = restored.Runs()
+			changes, changeErr = restored.Changes()
+			if runErr != nil || changeErr != nil || len(runs) != 2 || len(changes) != 2 {
+				t.Fatal("backup retained expired history or lost retained history")
+			}
+		})
+	}
+}
+
+func TestSchedulePreferencesPreserveOutstandingBackoff(t *testing.T) {
+	for _, limited := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary change", true: "provider deadline"}[limited], func(t *testing.T) {
+			e, _ := engineFixture(t, context.Background(), &fakeProvider{})
+			clock := e.Now()
+			settings, _ := e.Store.Settings()
+			settings.LastSlot, settings.Attempts = clock, 3
+			if limited {
+				settings.RetryAt = clock.Add(26 * time.Hour)
+			}
+			deadline := settings.RetryAt
+			if err := e.Store.SaveSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.SavePreferences(8, 30, "UTC", true, 60, 20); err != nil {
+				t.Fatal(err)
+			}
+			settings, err := e.Store.Settings()
+			if err != nil || !settings.LastSlot.IsZero() || settings.Attempts != 0 || !settings.RetryAt.Equal(deadline) || settings.Hour != 8 || settings.Minute != 30 || settings.Timezone != "UTC" || settings.ChangesDays != 60 || settings.LogsDays != 20 {
+				t.Fatalf("preference change lost backoff or failed to reset schedule: %+v, %v", settings, err)
+			}
+			resumed := New(context.Background(), e.Store, e.Secrets, false)
+			resumed.Factory, resumed.Now = e.Factory, func() time.Time { return clock }
+			if err = resumed.Tick(clock); err != nil {
+				t.Fatal(err)
+			}
+			resumed.Wait()
+			runs, _ := e.Store.Runs()
+			if limited && len(runs) != 0 || !limited && len(runs) != 1 {
+				t.Fatal("edited schedule ignored backoff or failed ordinary catch-up")
+			}
+			if limited {
+				clock = deadline
+				if err = resumed.Tick(clock); err != nil {
+					t.Fatal(err)
+				}
+				resumed.Wait()
+				runs, _ = e.Store.Runs()
+				if len(runs) != 1 {
+					t.Fatal("edited schedule did not resume at the saved deadline")
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteReportRetainsOptionalMetadataBackoff(t *testing.T) {
+	p := &fakeProvider{}
+	e, _ := engineFixture(t, context.Background(), p)
+	clock := e.Now()
+	deadline := clock.Add(26 * time.Hour)
+	p.snapshots = []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "unknown", RetryAt: deadline}, Findings: []model.Finding{{ID: "synthetic-1", Title: "Synthetic advisory", State: "open"}}}}
+	if err := e.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	settings, err := e.Store.Settings()
+	findings, _ := e.Store.Findings()
+	runs, _ := e.Store.Runs()
+	if err != nil || !settings.RetryAt.Equal(deadline) || settings.Attempts != 3 || len(findings) != 1 || len(runs) != 1 || runs[0].Status != "success" {
+		t.Fatal("complete report did not preserve findings, success and optional metadata deadline")
+	}
+	resumed := New(context.Background(), e.Store, e.Secrets, false)
+	resumed.Factory, resumed.Now = e.Factory, func() time.Time { return clock }
+	clock = clock.Add(24 * time.Hour)
+	if err = resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ = e.Store.Runs()
+	if len(runs) != 1 {
+		t.Fatal("new daily slot ignored optional metadata backoff after restart")
+	}
+	clock = deadline
+	p.snapshots[0].Coverage.RetryAt = time.Time{}
+	if err = resumed.Tick(clock); err != nil {
+		t.Fatal(err)
+	}
+	resumed.Wait()
+	runs, _ = e.Store.Runs()
+	settings, _ = e.Store.Settings()
+	if len(runs) != 2 || !settings.RetryAt.IsZero() {
+		t.Fatal("complete report did not resume after optional metadata backoff")
+	}
+}
+
+func TestForgetCredentialFailureOrdering(t *testing.T) {
+	for _, mode := range []string{"normal", "database failure", "deletion failure", "restored"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakeProvider{}
+			e, c := engineFixture(t, t.Context(), p)
+			c.Status = "connected"
+			c.ReconnectRequired = mode == "restored"
+			if err := e.Store.SaveConnection(c); err != nil {
+				t.Fatal(err)
+			}
+			repos, _ := e.Store.Repositories()
+			if err := e.Store.Apply(repos[0], model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open"}}}, e.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "deletion failure" {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, c.ID), []byte("synthetic-not-real"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				e.Secrets = secret.Files{Directory: dir}
+			}
+			if mode == "database failure" {
+				db, err := sql.Open("sqlite", e.Store.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if _, err = db.Exec("CREATE TRIGGER fail_connection_save BEFORE UPDATE ON connections BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END"); err != nil {
+					t.Fatal(err)
+				}
+				if err = e.ForgetCredential(c.ID); err == nil {
+					t.Fatal("failed metadata write reported success")
+				}
+				stored, readErr := e.Store.Connection(c.ID)
+				token, secretErr := e.Secrets.Get(c.ID)
+				if readErr != nil || stored != c || secretErr != nil || token != "synthetic-not-real" || e.connectionEpoch[c.ID] != 0 {
+					t.Fatal("failed metadata write changed connection, credential or epoch", readErr, secretErr)
+				}
+				if _, err = db.Exec("DROP TRIGGER fail_connection_save"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = e.adapter(stored); err != nil {
+					t.Fatal("failed forget broke the original usable connection", err)
+				}
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				err := e.ForgetCredential(c.ID)
+				if (err != nil) != (mode == "deletion failure") {
+					t.Fatal("unexpected forget result", err)
+				}
+				stored, err := e.Store.Connection(c.ID)
+				if err != nil || stored.Status != "disconnected" || stored.ReconnectRequired != c.ReconnectRequired || e.connectionEpoch[c.ID] != uint64(attempt+1) {
+					t.Fatal("disconnection not persisted", stored, err)
+				}
+				_, secretErr := e.Secrets.Get(c.ID)
+				if (secretErr == nil) != (mode == "deletion failure" || mode == "restored") {
+					t.Fatal("unexpected retained credential", secretErr)
+				}
+				calls := 0
+				resumed := New(t.Context(), e.Store, e.Secrets, false)
+				resumed.Factory = func(model.Connection, string) (provider.Provider, error) { calls++; return p, nil }
+				for i := 0; i < 2; i++ {
+					if err = resumed.Discover(t.Context(), c.ID); err == nil {
+						t.Fatal("disconnected discovery allowed")
+					}
+				}
+				if _, _, err = resumed.Start("manual"); err != nil {
+					t.Fatal(err)
+				}
+				resumed.Wait()
+				stored, err = e.Store.Connection(c.ID)
+				if err != nil || stored.Status != "disconnected" || calls != 0 {
+					t.Fatal("discovery or refresh reused a disconnected credential", stored, calls, err)
+				}
+			}
+			findings, err := e.Store.Findings()
+			if err != nil || len(findings) != 1 || findings[0].ID != "retained" || findings[0].State != "open" || findings[0].Missing {
+				t.Fatal("forget or failed collection changed retained active findings", err)
+			}
+			if mode != "deletion failure" {
+				if err = e.Connect(t.Context(), c, "synthetic-replacement"); err != nil {
+					t.Fatal(err)
+				}
+				if err = e.Discover(t.Context(), c.ID); err != nil {
+					t.Fatal("explicit reconnect did not restore access", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRestoredConnectionRequiresExplicitCredentialValidation(t *testing.T) {
+	p := &fakeProvider{}
+	e, c := engineFixture(t, context.Background(), p)
+	c.ReconnectRequired = true
+	if err := e.Store.SaveConnection(c); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	e.Factory = func(model.Connection, string) (provider.Provider, error) {
+		called = true
+		return p, nil
+	}
+	if err := e.Discover(context.Background(), c.ID); err == nil || called {
+		t.Fatal("restored discovery used an existing credential")
+	}
+	if _, _, err := e.Start("manual"); err != nil {
+		t.Fatal(err)
+	}
+	e.Wait()
+	if called {
+		t.Fatal("restored refresh used an existing credential")
+	}
+	if err := e.ForgetCredential(c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Secrets.Get(c.ID); err != nil {
+		t.Fatal("forgetting a restored connection deleted an unrelated existing credential")
+	}
+	if err := e.Connect(context.Background(), c, "synthetic replacement"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := e.Store.Connection(c.ID)
+	if err != nil || updated.ReconnectRequired {
+		t.Fatalf("explicit credential validation did not reconnect: %v", err)
+	}
+	called = false
+	if err = e.Discover(context.Background(), c.ID); err != nil || !called {
+		t.Fatalf("validated reconnection unavailable: %v", err)
+	}
+}
+
+func TestInterruptedRunAndCredentialRollback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &fakeProvider{block: make(chan struct{}), started: make(chan struct{}, 1)}
+	e, c := engineFixture(t, ctx, p)
+	_, _, err := e.Start("manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-p.started
+	cancel()
+	e.Wait()
+	runs, _ := e.Store.Runs()
+	if runs[0].Status != "interrupted" {
+		t.Fatal("interruption not recorded")
+	}
+	p.block = nil
+	p.started = nil
+	// A failed metadata write must restore the previous keychain value.
+	if err = e.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Connect(context.Background(), c, "synthetic-replacement"); err == nil {
+		t.Fatal("closed database unexpectedly accepted connection")
+	}
+	value, _ := e.Secrets.Get(c.ID)
+	if value != "synthetic-not-real" {
+		t.Fatal("failed connection update destroyed previous credential")
+	}
+}
+func TestDemoIndependentSelectionAndNoCredentialWrites(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	e := New(context.Background(), s, secret.NewMemory(), true)
+	if err = e.SeedDemo(); err != nil {
+		t.Fatal(err)
+	}
+	repos, _ := s.Repositories()
+	if len(repos) != 8 {
+		t.Fatal("demo discovery incomplete")
+	}
+	for _, r := range repos {
+		if !r.Selected {
+			t.Fatal("demo selection not initialized")
+		}
+	}
+	if err = e.Connect(context.Background(), model.Connection{}, "synthetic"); err == nil {
+		t.Fatal("demo accepted credentials")
+	}
+	settings, _ := s.Settings()
+	if settings.Enabled {
+		t.Fatal("demo enabled daily external work")
+	}
+	if err = e.SavePreferences(25, 0, "Europe/Zurich", true, 90, 30); err == nil {
+		t.Fatal("invalid schedule accepted")
+	}
+}
