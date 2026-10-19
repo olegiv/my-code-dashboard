@@ -1,0 +1,20 @@
+{
+  "owner": "olegiv",
+  "author": "Oleg Ivanchenko",
+  "name": "my-code-dashboard",
+  "visibility": "public",
+  "default_branch": "main",
+  "go_module": "github.com/olegiv/my-code-dashboard",
+  "executable": "my-code-dashboard",
+  "license": "GPL-3.0-only",
+  "description": "Self-hosted security dashboard for GitHub and GitLab repositories, built with Go, HTMX, and Alpine.js.",
+  "topics": ["security-dashboard", "vulnerability-management", "github", "gitlab", "golang", "htmx", "alpinejs", "self-hosted", "devsecops"],
+  "repository_id": 1424775093,
+  "node_id": "R_kgDOVOxXtQ",
+  "html_url": "https://github.com/olegiv/my-code-dashboard",
+  "created": true,
+  "created_at": "2026-10-18T20:10:17Z",
+  "first_release_proposal": "v0.1.0",
+  "availability_checked_on": "2026-10-18",
+  "availability_observation": "Authenticated gh repo view could not resolve the name immediately before creation. The empty public repository was then created with the recorded GitHub-assigned IDs."
+}

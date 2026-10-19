@@ -1,0 +1,152 @@
+{{/* SPDX-License-Identifier: GPL-3.0-only */}}
+{{define "repositories"}}<div class="page-heading"><div><div class="eyebrow">CHOOSE YOUR COVERAGE</div><h1>Repositories<span class="heading-dot">.</span></h1><p>Select what to monitor. Discovery imports repository metadata, not source code.</p></div><a class="button secondary" href="/connections">Discover repositories →</a></div>
+<div class="filter-summary"><span><strong>{{.Monitored}}</strong> monitored</span><span><strong>{{.TotalRepos}}</strong> discovered</span><span>Archived repositories remain selectable</span></div>
+{{if .Repositories}}
+<section class="panel">
+  <div class="panel-heading"><div><h2>Monitoring selection</h2><p>Save this list, then refresh to import existing security reports.</p></div></div>
+  <form action="/repositories" method="post" x-data="repositoryPicker" data-connection-filter="{{.ConnectionFilter}}">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="selection-toolbar">
+      <label class="checkbox-label"><input type="checkbox" data-select-all aria-label="Select all visible repositories" x-on:change="toggleAll"> Select visible</label>
+      <label class="repository-filter"><span class="sr-only">Connection</span><select name="connection" aria-label="Connection" x-model="connectionID" x-on:change="filterRows"><option value="">All connections</option>{{range .Connections}}<option value="{{.ID}}" {{if eq $.ConnectionFilter .ID}}selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+      <label class="repository-filter"><span class="sr-only">Archive status</span><select aria-label="Archive status" x-model="archive" x-on:change="filterRows"><option value="active">Active repositories</option><option value="archived">Archived repositories</option><option value="all">All repositories</option></select></label>
+      <label class="repository-search"><span class="sr-only">Filter repositories</span><input type="search" placeholder="Filter repositories…" x-model="query" x-on:input="filterRows"></label>
+      <button class="button primary small-button" type="submit">Save selection</button>
+    </div>
+    <p class="repository-filter-summary" aria-live="polite"><strong x-text="visibleCount">{{.TotalRepos}}</strong> shown · Filters keep checked repositories selected.</p>
+    <div class="table-scroll">
+      <table><thead><tr><th class="checkbox-cell"></th><th>Repository</th><th>Provider</th><th>Open findings</th><th>Coverage</th></tr></thead>
+        <tbody>{{range .Repositories}}
+          <tr data-connection="{{.ConnectionID}}" data-archived="{{.Archived}}" {{if or .Archived (and $.ConnectionFilter (ne $.ConnectionFilter .ConnectionID))}}hidden{{end}}>
+            <td class="checkbox-cell"><input class="repository-checkbox" type="checkbox" name="repository" value="{{.ID}}" aria-label="Monitor {{.Name}}" x-on:change="updateSelectAll" {{if .Selected}}checked{{end}}></td>
+            <td><a class="strong-link" href="{{repoLink .ID}}">{{.Name}}</a>{{if .Archived}}<span class="pill">archived</span>{{end}}<span class="cell-subtitle">{{.Namespace}}</span></td>
+            <td><span class="provider-text">{{title .Provider}}</span></td>
+            <td>{{.Open}}</td>
+            <td>{{if .Issues}}<span class="status warning">{{.Issues}} need attention</span>{{else if .LastSuccess.IsZero}}<span class="muted">Not collected</span>{{else}}<a class="text-link" href="{{repoLink .ID}}">View coverage →</a>{{end}}</td>
+          </tr>
+        {{end}}</tbody>
+      </table>
+    </div>
+    <p class="repository-filter-empty" x-cloak x-show="noMatches">No repositories match these filters.</p>
+    <div class="panel-bottom"><p>Unselected repository data stays local until you remove the installation. It is excluded from portfolio counts.</p><button class="button primary" type="submit">Save selection</button></div>
+  </form>
+</section>
+{{else}}<section class="panel empty-state"><div class="empty-icon">{{template "repo-icon"}}</div><h2>No repositories discovered yet</h2><p>Add a connection, then use its Discover repositories action.</p><a class="button primary" href="/connections">Go to connections →</a></section>{{end}}{{end}}
+
+{{define "repository"}}
+<div class="page-heading"><div><a class="eyebrow text-link" href="/repositories">← ALL REPOSITORIES</a><h1>{{.SelectedRepo.Name}}</h1><p>{{title .SelectedRepo.Provider}} · {{.SelectedRepo.DefaultBranch}} · {{if .SelectedRepo.Selected}}Monitoring selected{{else}}Not monitored{{end}}</p></div>{{if .SelectedRepo.URL}}<a class="button secondary" href="{{.SelectedRepo.URL}}" target="_blank" rel="noopener noreferrer">Open provider ↗</a>{{end}}</div>
+{{if not .SelectedRepo.Selected}}<p class="notice">Monitoring is paused. These findings are retained from the last import. Select this repository to resume refreshes.</p>{{end}}
+<section class="panel" id="active-findings">
+  <div class="panel-heading"><h2>Active findings</h2><a href="{{findingLink .SelectedRepo.ID}}">Filter active findings ↗</a></div>
+  {{template "finding-results" .}}
+</section>
+<details class="panel coverage-details">
+  <summary><span>Coverage &amp; freshness</span><span class="coverage-health {{if .SelectedRepo.Issues}}text-warning{{end}}">{{if .SelectedRepo.Issues}}{{.SelectedRepo.Issues}} need attention{{else if .SelectedRepo.LastSuccess.IsZero}}Not collected{{else}}Last collected {{age .SelectedRepo.LastSuccess}}{{end}}</span></summary>
+  <p class="coverage-explanation">Collection success and scanner evidence are independent. Imported totals include all alert statuses.</p>
+  <div class="table-scroll"><table class="coverage-table">
+    <thead><tr><th>Category</th><th>Collection</th><th>Last success</th><th>Analysis evidence</th><th>Scope &amp; notes</th></tr></thead>
+    <tbody>{{range .SelectedRepo.Coverage}}
+      <tr>
+        <td><strong>{{title .Category}}</strong><span class="cell-subtitle">{{.Count}} findings imported</span></td>
+        <td><span class="status {{if eq .Collection "success"}}success{{else if eq .Collection "unsupported"}}neutral{{else}}warning{{end}}">{{title .Collection}}</span></td>
+        <td>{{age .LastSuccess}}</td>
+        <td>{{if .AnalysisAt.IsZero}}<span class="muted">Not reported</span>{{else}}<span {{if stale .AnalysisAt}}class="text-warning"{{end}}>{{age .AnalysisAt}}</span><span class="cell-subtitle">{{.Ref}} {{.Commit}}</span>{{end}}</td>
+        <td class="coverage-note"><span class="pill">{{title .ScannerState}}</span> {{.Note}}</td>
+      </tr>
+    {{else}}<tr><td colspan="5"><div class="empty-state">Select this repository and refresh to establish report coverage.</div></td></tr>{{end}}</tbody>
+  </table></div>
+</details>
+{{end}}
+
+{{define "findings"}}<div class="page-heading"><div><div class="eyebrow">MAKE THE NEXT FIX COUNT</div><h1>Findings<span class="heading-dot">.</span></h1><p>Existing provider reports, with their original severity and lifecycle preserved.</p></div>{{template "refresh-button" .}}</div>{{template "refresh-status" .}}
+<section class="panel"><form class="filters" method="get" action="/findings" hx-get="/findings" hx-target="#finding-results" hx-swap="outerHTML" hx-push-url="true"><label class="search-field"><span class="sr-only">Search findings</span><input type="search" name="q" value="{{.Query}}" placeholder="Search finding, package, repository…"></label><label><span class="sr-only">Provider</span><select name="provider" aria-label="Provider"><option value="">All providers</option><option value="github" {{if eq .Provider "github"}}selected{{end}}>GitHub</option><option value="gitlab" {{if eq .Provider "gitlab"}}selected{{end}}>GitLab</option></select></label><label><span class="sr-only">Category</span><select name="category" aria-label="Category"><option value="">All categories</option>{{range .Categories}}<option value="{{.}}" {{if eq $.Category .}}selected{{end}}>{{title .}}</option>{{end}}</select></label><label><span class="sr-only">Severity</span><select name="severity" aria-label="Severity"><option value="">All severities</option>{{range .Severities}}<option value="{{.}}" {{if eq $.Severity .}}selected{{end}}>{{title .}}</option>{{end}}</select></label><label><span class="sr-only">Status</span><select name="state" aria-label="Status"><option value="all" {{if eq .State "all"}}selected{{end}}>All statuses</option><option value="open" {{if eq .State "open"}}selected{{end}}>Active (open)</option><option value="resolved" {{if eq .State "resolved"}}selected{{end}}>Resolved</option><option value="dismissed" {{if eq .State "dismissed"}}selected{{end}}>Dismissed</option><option value="unknown" {{if eq .State "unknown"}}selected{{end}}>Unknown</option></select></label><label><span class="sr-only">Repository</span><select name="repo" aria-label="Repository"><option value="">All repositories</option>{{range .Repositories}}<option value="{{.ID}}" {{if eq $.Repo .ID}}selected{{end}}>{{.Name}}</option>{{end}}</select></label><label><span class="sr-only">Group or owner</span><select name="namespace" aria-label="Group or owner"><option value="">All groups / owners</option>{{range .Namespaces}}<option value="{{.}}" {{if eq $.Namespace .}}selected{{end}}>{{.}}</option>{{end}}</select></label><label><span class="sr-only">Native status</span><select name="native_state" aria-label="Native status"><option value="">All native statuses</option>{{range .NativeStates}}<option value="{{.}}" {{if eq $.NativeState .}}selected{{end}}>{{.}}</option>{{end}}</select></label><button class="button primary small-button" type="submit">Apply filters</button><a class="reset-link" href="/findings">Reset</a></form>{{template "finding-results" .}}</section>{{end}}
+
+{{define "finding-results"}}<div id="finding-results"><div class="results-meta"><span><strong>{{.FindingCount}}</strong> matching findings</span><span>Severity unavailable from a provider stays <strong>unknown</strong>.</span></div>{{if .Findings}}<div class="table-scroll"><table><thead><tr><th>Finding</th><th>Severity</th><th>Repository</th><th>Status</th><th>Source</th></tr></thead><tbody>{{range .Findings}}<tr><td class="finding-title">{{if .URL}}<a class="strong-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Title}} ↗</a>{{else}}<strong>{{.Title}}</strong>{{end}}<span class="cell-subtitle">{{if .Package}}{{.Package}} · {{end}}{{title .Category}}{{if .Identifiers}} · {{range .Identifiers}}{{.}} {{end}}{{end}}</span>{{if .Missing}}<span class="missing-note">Not returned by latest complete collection · previous status retained</span>{{end}}</td><td><span class="severity {{.Severity}}">{{title .Severity}}</span><span class="cell-subtitle">{{.NativeSeverity}}{{if .DiagnosticSeverity}} · diagnostic: {{.DiagnosticSeverity}}{{end}}</span></td><td><a class="repo-small" href="{{repoLink .RepositoryID}}">{{.RepositoryName}}</a><span class="cell-subtitle">{{title .Provider}}</span></td><td><span class="status {{if eq .State "open"}}warning{{else}}neutral{{end}}">{{title .State}}</span><span class="cell-subtitle">{{.NativeState}}{{if .NativeResolution}} · {{.NativeResolution}}{{end}}</span></td><td><span class="scanner-label">{{.Scanner}}</span><span class="cell-subtitle">{{.Scope}}</span>{{if .Commit}}<code class="cell-subtitle" title="{{.Commit}}">{{short .Commit}}</code>{{end}}</td></tr>{{end}}</tbody></table></div><div class="pagination"><span>Page {{.PageNumber}} of {{.PageCount}} · 50 results per page</span><div>{{if .PreviousURL}}<a class="button secondary small-button" href="{{.PreviousURL}}" hx-get="{{.PreviousURL}}" hx-target="#finding-results" hx-swap="outerHTML" hx-push-url="true">← Previous</a>{{end}}{{if .NextURL}}<a class="button secondary small-button" href="{{.NextURL}}" hx-get="{{.NextURL}}" hx-target="#finding-results" hx-swap="outerHTML" hx-push-url="true">Next →</a>{{end}}</div></div>{{else}}<div class="empty-state"><div class="empty-icon">{{template "shield-icon"}}</div><h2>{{if eq .State "open"}}No active findings match this view{{else}}No findings match this view{{end}}</h2><p>This is not proof of a completed scan. Review repository coverage to check which reports are available.</p><a class="text-link" href="/repositories">Review coverage →</a></div>{{end}}</div>{{end}}
+
+{{define "connections"}}<div class="page-heading"><div><div class="eyebrow">BRING YOUR REPORTS TOGETHER</div><h1>Connections<span class="heading-dot">.</span></h1><p>Use read-only access. Your source code stays with GitHub and GitLab.</p></div><span class="pill">{{.Backend}}</span></div>
+<div class="connection-grid">{{range .Connections}}<article class="panel connection-card"><div class="connection-card-heading"><span class="provider-mark large {{.Provider}}">{{if eq .Provider "github"}}GH{{else}}GL{{end}}</span><span class="status {{if eq .Status "connected"}}success{{else}}warning{{end}}">{{title .Status}}</span></div><h2>{{.Name}}</h2><div class="connection-url">{{.BaseURL}}</div><dl class="connection-details"><div><dt>Account</dt><dd>{{.Identity}}</dd></div><div><dt>API / instance</dt><dd>{{if .Version}}{{.Version}}{{else}}Not reported{{end}}</dd></div></dl><p class="connection-message">{{.Message}}</p><form method="post" action="/connections/discover"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="connection_id" value="{{.ID}}"><button class="button primary full-width" type="submit">Discover repositories →</button></form>{{if not $.Demo}}<form class="forget-form" method="post" action="/connections/forget"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="connection_id" value="{{.ID}}"><button class="link-button" type="submit">Remove local credential</button></form>{{end}}</article>{{end}}</div>
+{{if .Demo}}
+<div class="notice">Demo mode never accepts real credentials. Run the app without <code>--demo</code> to connect your accounts.</div>
+{{else if .SecretFiles}}
+<section class="panel form-panel"><h2>Headless credential backend</h2><p>Tokens are supplied by private files through the credential directory. Use the documented connection provisioning command; replace a token by updating its provisioned file.</p><code>my-code-dashboard connection --help</code></section>
+{{else}}
+<section class="panel form-panel">
+  <div class="panel-heading flush"><div><h2>Add or update a connection</h2><p>Tokens are validated before they are saved to your system keychain.</p></div>{{template "lock-icon"}}</div>
+  <form method="post" action="/connections" x-data="connectionForm">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="form-grid">
+      <label class="span-two">Update existing connection<select name="connection_id" x-on:change="existingChanged"><option value="">Create a new connection</option>{{range .Connections}}<option value="{{.ID}}" data-provider="{{.Provider}}" data-base-url="{{.BaseURL}}" data-name="{{.Name}}">{{.Name}} · {{.BaseURL}}</option>{{end}}</select><span class="field-help">Selecting a connection fills its provider and URL and clears the token. Verify that URL before entering a token. Updates must match the saved destination.</span></label>
+      <label>Connection name<input name="name" placeholder="e.g. Personal GitHub" maxlength="100" required autocomplete="off"></label>
+      <label>Provider<select name="provider" x-model="provider" x-on:change="providerChanged"><option value="github">GitHub</option><option value="gitlab">GitLab self-managed</option></select></label>
+      <label class="span-two">Provider URL<input type="url" name="base_url" x-model="baseURL" x-on:input="clearToken" required placeholder="https://github.com"><span class="field-help">GitHub uses https://github.com. GitLab supports your private HTTPS instance and system-trusted corporate CA.</span></label>
+      <label x-data="tokenInput">Access token<div class="password-field"><input name="token" type="password" x-bind:type="inputType" required maxlength="16384" autocomplete="new-password" spellcheck="false" placeholder="Stored only in your keychain"><button type="button" class="link-button" x-on:click="toggle" x-text="label">Show</button></div><span class="field-help">Your account is identified from the token; no username is required.</span></label>
+    </div>
+    <div class="token-guidance" x-show="isGitHub">
+      <a class="button secondary small-button" href="https://github.com/settings/personal-access-tokens/new?name=My+Code+Dashboard&amp;expires_in=90&amp;metadata=read&amp;vulnerability_alerts=read&amp;security_events=read&amp;secret_scanning_alerts=read" target="_blank" rel="noopener noreferrer">Create GitHub token ↗</a>
+      <p>Opens GitHub with a 90-day expiry and read-only permissions for Metadata, Dependabot alerts, Code scanning alerts, and Secret scanning alerts.</p>
+      <ol>
+        <li>Check <b>Resource owner</b>: GitHub defaults to your signed-in personal account.</li>
+        <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and select the repositories you want to monitor.</li>
+        <li>Review the permissions, then click <b>Generate token</b> on GitHub.</li>
+        <li>Copy the token into <b>Access token</b> above, then click <b>Validate &amp; save connection</b>.</li>
+      </ol>
+      <p><a class="text-link" href="https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens" target="_blank" rel="noopener noreferrer">GitHub token documentation ↗</a></p>
+    </div>
+    <div class="token-guidance" x-show="isGitLab">
+      <a class="button secondary small-button" x-show="gitlabTokenURL" x-bind:href="gitlabTokenURL" target="_blank" rel="noopener noreferrer">Create GitLab token ↗</a>
+      <p x-show="gitlabURLInvalid">Enter an HTTPS instance URL without credentials, query parameters, or a fragment in <b>Provider URL</b> to enable the token link.</p>
+      <p>Opens the personal access token page on your configured GitLab instance, including any installation subpath, with only <code>read_api</code> requested.</p>
+      <ol>
+        <li>Sign in to your corporate GitLab account. Choose <b>Legacy token</b> if the page offers token types.</li>
+        <li>Use <b>My Code Dashboard</b> as the token name and choose an expiration allowed by your corporate policy, for example 90 days.</li>
+        <li>Confirm that <code>read_api</code> is the <b>only selected scope</b>, then create the token on GitLab.</li>
+        <li>Copy the token into <b>Access token</b> above, then click <b>Validate &amp; save connection</b>.</li>
+      </ol>
+      <p>If your GitLab version uses a different page, open your avatar → <b>Edit profile → Access → Personal access tokens</b> and select only <code>read_api</code>.</p>
+      <p><a class="text-link" href="https://docs.gitlab.com/user/profile/personal_access_tokens/" target="_blank" rel="noopener noreferrer">GitLab token documentation ↗</a></p>
+    </div>
+    <div class="token-guidance"><strong>Minimum permissions</strong><p><b>GitHub:</b> metadata and read access for Dependabot alerts, Code scanning alerts, and Secret scanning alerts. Use a separate fine-grained token per resource owner. Organization approval and security feature eligibility may also be required.</p><p><b>GitLab:</b> <code>read_api</code> and a role permitted to read project vulnerability reports. Ultimate licensing does not configure scanners automatically.</p></div>
+    <button class="button primary" type="submit">Validate &amp; save connection →</button>
+  </form>
+</section>
+{{end}}{{end}}
+
+{{define "activity"}}
+<div class="page-heading"><div><div class="eyebrow">COLLECTION HEALTH</div><h1>Refresh activity<span class="heading-dot">.</span></h1><p>Synchronization imports existing reports. It does not run a new security scan.</p></div>{{template "refresh-button" .}}</div>
+{{template "refresh-status" .}}
+<section class="panel">
+  <div class="panel-heading"><div><h2>Recent refreshes</h2><p>Disabled scanners and missing analysis are coverage gaps, not collection failures. Previous findings are retained.</p></div><span class="small muted">{{.Settings.LogsDays}} day retention</span></div>
+  <div class="table-scroll"><table class="refresh-table">
+    <thead><tr><th>Started</th><th>Trigger</th><th>Result</th><th>Category collections</th><th>Details</th></tr></thead>
+    <tbody>{{range $index, $run := .Runs}}
+      <tr>
+        <td>{{date .StartedAt $.Settings.Timezone}}<span class="cell-subtitle">{{age .StartedAt}}</span></td>
+        <td>{{title .Trigger}}</td>
+        <td><span class="status {{if eq .Status "success"}}success{{else if eq .Status "running"}}neutral{{else}}warning{{end}}">{{title .Status}}</span></td>
+        <td class="run-counts"><span>{{.Succeeded}} completed · <span class="{{if .Failed}}text-error{{end}}">{{.Failed}} failed</span></span>{{if .DetailsRecorded}}<span class="cell-subtitle">{{.Disabled}} disabled · {{.NoAnalysis}} missing analysis</span>{{if .Unsupported}}<span class="cell-subtitle">{{.Unsupported}} unsupported categories skipped</span>{{end}}{{end}}</td>
+        <td class="coverage-note">{{if .DetailsRecorded}}{{if eq .Status "running"}}Collecting selected repositories…{{else}}{{.Message}}{{end}}{{else}}{{.Message}}<span class="cell-subtitle">Legacy result: coverage gaps may be counted as failures. Repository/category reasons were not recorded for this refresh.</span>{{end}}</td>
+      </tr>
+      {{if .DetailsRecorded}}
+        {{with .Attention}}
+          <tr class="run-detail-row"><td colspan="5">
+            <details class="run-details" {{if eq $index 0}}open{{end}}>
+              <summary>Repository and category details <span class="muted">· {{len .}} need attention</span></summary>
+              <table class="run-outcomes"><thead><tr><th scope="col">Repository</th><th scope="col">Category</th><th scope="col">Outcome</th><th scope="col">Reason</th></tr></thead><tbody>
+                {{range .}}<tr>
+                  <td><a class="strong-link" href="{{repoLink .RepositoryID}}">{{.RepositoryName}}</a><span class="cell-subtitle">{{title .Provider}}</span></td>
+                  <td>{{title .Category}}</td>
+                  <td><span class="status {{if or (eq .Collection "disabled") (eq .Collection "no_analysis") (eq .Collection "success")}}warning{{else}}failure{{end}}">{{title .Collection}}</span>{{if eq .Collection "success"}}<span class="cell-subtitle">Scanner: {{title .ScannerState}}</span>{{end}}</td>
+                  <td class="run-reason">{{.Reason}}</td>
+                </tr>{{end}}
+              </tbody></table>
+            </details>
+          </td></tr>
+        {{end}}
+      {{end}}
+    {{else}}<tr><td colspan="5"><div class="empty-state">No refreshes yet. Select repositories, then request your first refresh.</div></td></tr>{{end}}</tbody>
+  </table></div>
+</section>
+<section class="panel changes-panel"><div class="panel-heading"><div><h2>Finding changes</h2><p>Latest 200 events within {{.Settings.ChangesDays}} days, compared with the preceding successful import.</p></div></div>{{if .Changes}}<ul class="changes-list">{{range .Changes}}<li><span class="change-marker">↗</span><div><strong>{{.Title}}</strong><span class="cell-subtitle">{{.RepositoryName}} · {{.Kind}} · {{.Before}} → {{.After}}</span></div><time>{{age .At}}</time></li>{{end}}</ul>{{else}}<div class="empty-state compact"><p>No changes recorded. First imports establish a baseline.</p></div>{{end}}</section>
+{{end}}
+
+{{define "settings"}}<div class="page-heading"><div><div class="eyebrow">YOUR INSTALLATION</div><h1>Settings<span class="heading-dot">.</span></h1><p>Local configuration. Independent on every Mac.</p></div><span class="pill">{{.Version}}</span></div><div class="settings-grid"><section class="panel form-panel"><h2>Daily refresh</h2><p class="muted">One catch-up after a missed run. The app cannot refresh while the Mac sleeps, is off, or the user is logged out.</p><form method="post" action="/settings"><input type="hidden" name="csrf" value="{{.CSRF}}"><label class="checkbox-label schedule-toggle"><input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}}> Enable daily synchronization</label><div class="form-grid"><label>Refresh time<input type="time" name="time" value="{{clock .Settings.Hour .Settings.Minute}}" required></label><label>Timezone<input name="timezone" value="{{.Settings.Timezone}}" required></label><label>Change history (days)<input type="number" name="changes_days" min="1" max="3650" value="{{.Settings.ChangesDays}}" required></label><label>Refresh logs (days)<input type="number" name="logs_days" min="1" max="365" value="{{.Settings.LogsDays}}" required></label></div><p class="field-help">Timezone rules respect daylight saving time. Existing findings remain stored.</p><button class="button primary" type="submit">Save settings</button></form></section><div class="settings-stack"><section class="panel form-panel"><h2>Background operation</h2>{{if eq .OS "darwin"}}<p class="muted">A per-user LaunchAgent keeps this app available while you are logged in. No administrator access is needed. Removing start at login takes effect at your next logout; a running agent continues for this login session.</p><div class="inline-status"><span class="status {{if .ServiceInstalled}}success{{else}}neutral{{end}}">{{if .ServiceInstalled}}Start at login installed{{else}}Foreground process{{end}}</span></div><form method="post" action="/service/{{if .ServiceInstalled}}remove{{else}}install{{end}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="button secondary" {{if .Demo}}disabled{{end}} type="submit">{{if .ServiceInstalled}}Remove start at login{{else}}Install start at login{{end}}</button></form>{{else}}<p class="muted">Use the systemd service example in the repository documentation. Headless installations support provisioned credential files.</p>{{end}}</section><section class="panel form-panel"><h2>Backup &amp; restore</h2><p class="muted">Download a consistent database backup. It contains private report data and configuration; provider credentials are excluded.</p><form method="post" action="/backup"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="button secondary" type="submit">Download backup ↓</button></form><p class="field-help">Restore with the app stopped:<br><code>my-code-dashboard restore --archive backup.tar.gz</code></p></section></div></div><section class="panel installation-panel"><h2>Installation</h2><dl><div><dt>Data directory</dt><dd><code>{{.DataDir}}</code></dd></div><div><dt>Credentials</dt><dd>{{.Backend}}</dd></div><div><dt>Network access</dt><dd>Loopback only. Internet hosting requires a separate authenticated HTTPS deployment.</dd></div><div><dt>Corporate reports</dt><dd>Confirm permission before moving them to another host.</dd></div></dl></section>{{end}}

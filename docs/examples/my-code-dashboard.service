@@ -1,0 +1,22 @@
+[Unit]
+Description=My Code Dashboard (local security report viewer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/my-code-dashboard serve --data-dir %S/my-code-dashboard --addr 127.0.0.1:7364
+StateDirectory=my-code-dashboard
+StateDirectoryMode=0700
+UMask=0077
+# Provision this private file before starting, and register matching connection metadata.
+LoadCredential=github-personal:%h/.config/my-code-dashboard/credentials/github-personal
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

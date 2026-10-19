@@ -1,0 +1,23 @@
+# Contributing
+
+Coding agents should follow [AGENTS.md](AGENTS.md). Claude Code enters through [CLAUDE.md](CLAUDE.md), which references the shared instructions.
+
+Use idiomatic Go and server-rendered HTML. Keep the application usable as a native binary without Node.js, npm, Docker, a frontend bundler, or AI services. Discuss dependencies that introduce new operating requirements.
+
+Go 1.26.9 is the module minimum and the pinned build toolchain. Run `gofmt` and `make check` for uncached race tests, golangci-lint, vet, tidy/module verification, govulncheck and browser checksums. Before committing, stage the intended files and run `make commit-check` to test that exact export. Install the pre-push guard with `make install-test-gate`; it preserves existing hooks and needs a configured global hook to chain to it. See [testing and Codex review](docs/testing.md) for the workflow adapted from ocms-go, independent code/security reviews, and hosted CI prerequisites. The initial commit requires actual Codex and Codex Security reviews, with validated blockers addressed and limitations recorded. Direct Go commands need `GOTOOLCHAIN=go1.26.9` when a newer Go is installed; the module minimum does not select an older compiler. Add direct tests for changed import behavior, normal cases, failures, and downstream UI/data semantics. Use `httptest` and synthetic fixtures; never contact live providers during automated tests.
+
+See [the toolchain decision](docs/go-toolchain.md) before changing the pin. It explains the Go 1.17 build barriers, the observed Go 1.27 connection problem, and the checks needed for a supported replacement.
+
+Provider adapters must be read-only. Complete pagination before replacing a category snapshot; preserve native state/severity, unknown coverage, and previous complete data on failure. Do not infer resolution from absence. New response fields require a data-minimization/redaction review, especially secret detection.
+
+Browser assets are committed under `internal/web/assets/vendor`. Update from official upstream releases, retain all relevant licenses, verify compatibility with strict CSP and HTMX swaps, record exact SHA-256 digests in `THIRD_PARTY_NOTICES.md`, and test in a real browser. Use the CSP edition of Alpine.
+
+For Go dependency changes, run `GOTOOLCHAIN=go1.26.9 go mod tidy`, update `THIRD_PARTY_NOTICES.md` where needed, and rerun vulnerability checks. `go.mod` and `go.sum` record the selected versions and checksums. Run the release script and inspect its generated `THIRD_PARTY_LICENSES.txt` files; do not commit generated notice inventories or directories. SQLite v1.60.1 selects libc v1.77.1; retain that exact pairing. Do not independently force a libc update.
+
+Keep credentials, corporate URLs, private project identifiers, screenshots containing live data, databases, exports, and local audit output outside version control. The ignored `output/`, `bin/`, and `dist/` directories are local artifacts. New examples and issue reproductions must use generic hosts and synthetic records.
+
+Run `make pr-check` after staging for ShellCheck, workflow validation and secret detection; install ShellCheck first. It checks an index export and requires the release manifest to list every indexed file exactly once. Run `make package-check` on the same exported candidate for four targets and source verification. The first application arrives through a PR against a README/LICENSE-only bootstrap; see [GitHub validation](docs/github-validation.md) for check names, hosted Codex setup and pending approvals. Application checks and reviews are required before the application commit; they do not apply to the documentation-only bootstrap.
+
+Release preparation copies only files named in [scripts/release-files.txt](scripts/release-files.txt) into a temporary source tree, then builds and packages from that tree. Add every intended public source, test, asset, instruction and documentation file to the manifest when adding it to the project. Unlisted files, including ignored/untracked files inside source directories, stay out of binaries and archives. The script rejects invalid paths, symlinks and duplicates; the manifest remains a reviewed public-data boundary, so never list private material. Inspect the generated archives before distributing them. Automatic PR packaging does not upload them; the separately dispatched release-preparation workflow uploads a public Actions artifact, without creating a tag or GitHub Release.
+
+Original contributions are licensed GPL-3.0-only. Preserve upstream notices and the `SPDX-License-Identifier: GPL-3.0-only` header in original Go/JavaScript files. See `SECURITY.md` for vulnerability reporting.

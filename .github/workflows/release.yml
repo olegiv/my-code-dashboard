@@ -1,0 +1,35 @@
+name: Prepare release archives
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without v prefix (builds only; no publication)'
+        required: true
+        default: '0.1.0-dev'
+permissions:
+  contents: read
+env:
+  GOTOOLCHAIN: go1.26.9
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - run: go test ./...
+      - name: Build and verify archives
+        run: |
+          bash scripts/release.sh "$RELEASE_VERSION"
+          go run ./scripts/packagecheck -version "$RELEASE_VERSION"
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-archives
+          path: dist/
+          retention-days: 7
