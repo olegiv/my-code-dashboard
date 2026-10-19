@@ -202,6 +202,9 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Vary", "HX-Request, HX-History-Restore-Request")
 		host, port, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host, port, err = net.SplitHostPort(r.Host + ":80")
+		}
 		_, expectedPort, _ := net.SplitHostPort(s.Addr)
 		ip := net.ParseIP(host)
 		if err != nil || (host != "localhost" && (ip == nil || !ip.IsLoopback())) || port != expectedPort {

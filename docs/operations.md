@@ -8,6 +8,8 @@ Build with `make build`, which selects the security-patched Go 1.26.9 toolchain,
 
 `--open` starts the platform browser opener in the background. HTTP serving, scheduling and shutdown do not wait for the browser to exit. On Linux, `xdg-open` may stay attached to the browser; if opening fails, use the printed local URL.
 
+HTTP Host validation accepts a loopback IP or `localhost` without an explicit port only when the listener uses port 80. Bracketed IPv6 such as `[::1]` follows the same rule. Other listener ports, including the default 7364, require a matching explicit Host port. Foreign hosts, malformed authorities and empty explicit ports remain rejected; CSRF and cross-origin checks still apply to mutations.
+
 The default directory is `~/Library/Application Support/My Code Dashboard`, protected with mode 0700. SQLite is 0600; the executable sets umask 0077. Keychain services use a random persisted installation ID so installations do not share credentials. A locked/unavailable keychain produces a visible collection error without a plaintext fallback. A native macOS Keychain dialog may require your approval; enter credentials locally.
 
 In Settings, **Install start at login** copies the running executable to the data directory's `bin/`, writes a per-user LaunchAgent, and bootstraps it without sudo. Exit the foreground process to release its installation lock. The agent retries while that lock is busy. It runs only in your login session and can resume collection after sleep. No claim is made that it can wake a sleeping Mac.

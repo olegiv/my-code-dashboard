@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -220,6 +221,90 @@ func TestHostCrossOriginAndCSRFProtection(t *testing.T) {
 		t.Fatal("completed refresh did not update dashboard")
 	}
 }
+func TestDefaultHTTPPortHostProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name, listener, host string
+		allowed              bool
+	}{
+		{"IPv4 implicit", "127.0.0.1:80", "127.0.0.1", true},
+		{"IPv4 explicit", "127.0.0.1:80", "127.0.0.1:80", true},
+		{"IPv6 implicit", "[::1]:80", "[::1]", true},
+		{"IPv6 explicit", "[::1]:80", "[::1]:80", true},
+		{"localhost implicit", "127.0.0.1:80", "localhost", true},
+		{"localhost explicit", "127.0.0.1:80", "localhost:80", true},
+		{"IPv4 nondefault", "127.0.0.1:7364", "127.0.0.1:7364", true},
+		{"IPv6 nondefault", "[::1]:7364", "[::1]:7364", true},
+		{"localhost nondefault", "127.0.0.1:7364", "localhost:7364", true},
+		{"IPv4 missing nondefault", "127.0.0.1:7364", "127.0.0.1", false},
+		{"IPv6 missing nondefault", "[::1]:7364", "[::1]", false},
+		{"localhost missing nondefault", "127.0.0.1:7364", "localhost", false},
+		{"wrong explicit port", "127.0.0.1:80", "127.0.0.1:7364", false},
+		{"default port on nondefault listener", "127.0.0.1:7364", "127.0.0.1:80", false},
+		{"foreign implicit", "127.0.0.1:80", "attacker.example", false},
+		{"foreign explicit", "127.0.0.1:80", "attacker.example:80", false},
+		{"localhost suffix", "127.0.0.1:80", "localhost.attacker.example", false},
+		{"empty host", "127.0.0.1:80", "", false},
+		{"empty IPv4 port", "127.0.0.1:80", "127.0.0.1:", false},
+		{"empty IPv6 port", "[::1]:80", "[::1]:", false},
+		{"unbracketed IPv6", "[::1]:80", "::1", false},
+		{"malformed brackets", "[::1]:80", "[::1", false},
+		{"extra port", "127.0.0.1:80", "127.0.0.1:80:80", false},
+		{"path", "127.0.0.1:80", "127.0.0.1/path", false},
+		{"userinfo", "127.0.0.1:80", "user@127.0.0.1", false},
+		{"named port", "127.0.0.1:80", "127.0.0.1:http", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := appFixture(t, false)
+			app.Addr = tc.listener // Exercise the handler without binding privileged port 80.
+			status := http.StatusForbidden
+			if tc.allowed {
+				status = http.StatusOK
+			}
+			for _, path := range []string{"/settings", "/assets/app.js", "/healthz"} {
+				r := request(app, "GET", path, nil, map[string]string{"Host": tc.host})
+				if r.Code != status {
+					t.Errorf("GET %s: got %d, want %d", path, r.Code, status)
+				}
+				if r.Header().Get("Cache-Control") != "no-store" || !strings.Contains(r.Header().Get("Content-Security-Policy"), "script-src 'self'") {
+					t.Fatal("host validation lost security headers")
+				}
+			}
+			values := url.Values{"time": {"10:15"}, "timezone": {"Europe/Zurich"}, "enabled": {"on"}, "changes_days": {"90"}, "logs_days": {"30"}}
+			for _, csrf := range []string{"", "wrong", app.csrf} {
+				values.Set("csrf", csrf)
+				r := request(app, "POST", "/settings", values, map[string]string{"Host": tc.host, "Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"})
+				if r.Code != http.StatusForbidden {
+					t.Fatal("host fallback allowed a cross-origin mutation")
+				}
+				if csrf == app.csrf {
+					continue
+				}
+				r = request(app, "POST", "/settings", values, map[string]string{"Host": tc.host, "Origin": "http://" + tc.host, "Sec-Fetch-Site": "same-origin"})
+				if r.Code != http.StatusForbidden {
+					t.Fatal("host fallback bypassed CSRF")
+				}
+			}
+			settings, err := app.Engine.Store.Settings()
+			if err != nil || settings.Hour != 9 {
+				t.Fatal("rejected mutation changed settings", err)
+			}
+			values.Set("csrf", app.csrf)
+			r := request(app, "POST", "/settings", values, map[string]string{"Host": tc.host, "Origin": "http://" + tc.host, "Sec-Fetch-Site": "same-origin"})
+			status = http.StatusForbidden
+			if tc.allowed {
+				status = http.StatusSeeOther
+			}
+			if r.Code != status {
+				t.Errorf("valid-CSRF POST: got %d, want %d", r.Code, status)
+			}
+			settings, err = app.Engine.Store.Settings()
+			if err != nil || (tc.allowed && (settings.Hour != 10 || settings.Minute != 15)) || (!tc.allowed && settings.Hour != 9) {
+				t.Fatal("host validation did not preserve intended mutation semantics", err)
+			}
+		})
+	}
+}
+
 func TestProviderContentIsEscapedAndDemoRejectsTokens(t *testing.T) {
 	app := appFixture(t, true)
 	repos, _ := app.Engine.Store.Repositories()
