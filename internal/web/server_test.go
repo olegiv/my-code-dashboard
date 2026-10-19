@@ -86,6 +86,59 @@ func TestPagesFiltersAndHTMXResponses(t *testing.T) {
 		t.Fatal("repository coverage missing")
 	}
 }
+
+func TestEnabledScannerWithoutPipelineEvidenceNeedsAttention(t *testing.T) {
+	for _, state := range []string{"enabled", "observed"} {
+		t.Run(state, func(t *testing.T) {
+			app := appFixture(t, false)
+			c := model.Connection{ID: "fixture", Provider: "gitlab", BaseURL: "https://gitlab.example"}
+			if err := app.Engine.Store.SaveConnection(c); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Engine.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "42", Name: "example/project"}}); err != nil {
+				t.Fatal(err)
+			}
+			repos, _ := app.Engine.Store.Repositories()
+			repo := repos[0]
+			if err := app.Engine.Store.SelectRepositories(map[string]bool{repo.ID: true}); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: state, Note: "Synthetic scanner evidence"}, Findings: []model.Finding{{ID: "1", Source: "fixture", Title: "Active synthetic finding", State: "open", Severity: "high"}}}
+			if err := app.Engine.Store.Apply(repo, snapshot, app.Engine.Now()); err != nil {
+				t.Fatal(err)
+			}
+			run := model.Run{ID: "fixture", StartedAt: app.Engine.Now(), FinishedAt: app.Engine.Now(), DetailsRecorded: true, Outcomes: []model.CollectionOutcome{{RepositoryID: repo.ID, RepositoryName: repo.Name, Provider: "gitlab", Category: "code", Collection: "success", ScannerState: state, Reason: snapshot.Coverage.Note}}}
+			want := 0
+			if state == "enabled" {
+				want = 1
+			}
+			if got := len(run.Attention()); got != want {
+				t.Errorf("activity attention = %d, want %d", got, want)
+			}
+			for _, page := range []string{"overview", "repository"} {
+				req := httptest.NewRequest("GET", "http://127.0.0.1:7364/?id="+url.QueryEscape(repo.ID), nil)
+				v, err := app.view(req, page, "Synthetic")
+				if err != nil || v.Issues != want || len(v.Repositories) != 1 || v.Repositories[0].Issues != want {
+					t.Fatalf("%s coverage issues: %+v, %v", page, v, err)
+				}
+				if page == "repository" && (v.SelectedRepo == nil || v.SelectedRepo.Issues != want) {
+					t.Fatal("repository detail lost the coverage gap")
+				}
+			}
+			if err := app.Engine.Store.SaveRun(run); err != nil {
+				t.Fatal(err)
+			}
+			activity := request(app, "GET", "/activity", nil, nil)
+			if activity.Code != 200 || (want == 1 && !strings.Contains(activity.Body.String(), snapshot.Coverage.Note)) {
+				t.Fatal("activity did not display the saved reason")
+			}
+			response := request(app, "GET", "/repositories/view?id="+url.QueryEscape(repo.ID), nil, nil)
+			if response.Code != 200 || !strings.Contains(response.Body.String(), "Active synthetic finding") {
+				t.Fatal("coverage gap hid the imported active finding")
+			}
+		})
+	}
+}
 func TestFindingsHistoryRestorationReturnsShell(t *testing.T) {
 	app := appFixture(t, true)
 	path := "/findings?severity=critical&provider=github"

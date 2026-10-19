@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -180,29 +181,35 @@ func Restore(dir, archive string) error {
 	if err = store.ValidateBackup(filepath.Join(tmp, "dashboard.sqlite")); err != nil {
 		return err
 	}
-	target := filepath.Join(dir, "dashboard.sqlite")
-	destinationID := model.NewID()
-	if _, err = os.Stat(target); err == nil {
-		old, err := store.Open(target)
-		if err != nil {
-			return err
+	return restoreDatabase(filepath.Join(tmp, "dashboard.sqlite"), filepath.Join(dir, "dashboard.sqlite"))
+}
+
+func restoreDatabase(candidatePath, target string) (err error) {
+	suffixes := []string{"", "-wal", "-shm", "-journal"}
+	hasPrevious := false
+	for _, suffix := range suffixes {
+		info, e := os.Lstat(target + suffix)
+		if errors.Is(e, os.ErrNotExist) {
+			continue
 		}
-		settings, e := old.Settings()
 		if e != nil {
-			old.Close()
 			return e
 		}
-		destinationID = settings.InstallationID
-		backup := filepath.Join(dir, "before-restore-"+time.Now().UTC().Format("20060102T150405.000000000")+".sqlite")
-		err = old.Backup(context.Background(), backup)
-		old.Close()
-		if err != nil {
-			return err
+		if !info.Mode().IsRegular() {
+			return errors.New("existing database and SQLite sidecars must be regular files")
+		}
+		hasPrevious = true
+	}
+	destinationID := model.NewID()
+	// Read without migration: corrupt or newer databases must not block recovery.
+	if settings, e := store.ReadSettings(target); e == nil {
+		if id, e := hex.DecodeString(settings.InstallationID); e == nil && len(id) == 16 {
+			destinationID = settings.InstallationID
 		}
 	}
 	// A restore into another installation must not adopt its Keychain namespace
-	// or LaunchAgent identity. Existing destination identity survives a restore.
-	candidate, err := store.Open(filepath.Join(tmp, "dashboard.sqlite"))
+	// or LaunchAgent identity. Preserve a readable, valid destination identity.
+	candidate, err := store.Open(candidatePath)
 	if err != nil {
 		return err
 	}
@@ -233,12 +240,35 @@ func Restore(dir, archive string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if err = os.Remove(target + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if !hasPrevious {
+		return os.Rename(candidatePath, target)
+	}
+	previous, err := os.MkdirTemp(filepath.Dir(target), "before-restore-"+time.Now().UTC().Format("20060102T150405")+"-")
+	if err != nil {
+		return err
+	}
+	previousDB := filepath.Join(previous, "dashboard.sqlite")
+	var moved []string
+	defer func() {
+		if err == nil {
+			return
+		}
+		for i := len(moved) - 1; i >= 0; i-- {
+			suffix := moved[i]
+			if rollbackErr := os.Rename(previousDB+suffix, target+suffix); rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("recover previous database files from %s: %w", previous, rollbackErr))
+			}
+		}
+	}()
+	for _, suffix := range suffixes {
+		if err = os.Rename(target+suffix, previousDB+suffix); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
 			return err
 		}
+		moved = append(moved, suffix)
 	}
-	return os.Rename(filepath.Join(tmp, "dashboard.sqlite"), target)
+	return os.Rename(candidatePath, target)
 }
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>

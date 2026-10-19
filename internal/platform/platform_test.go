@@ -108,7 +108,7 @@ func TestBackupRoundTripAndRejectedArchivePreservesDatabase(t *testing.T) {
 	if err = Restore(dir, corruptArchive); err == nil {
 		t.Fatal("corrupt gzip checksum accepted")
 	}
-	copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*.sqlite"))
+	copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*"))
 	if len(copies) != 1 {
 		t.Fatal("previous database was not saved")
 	}

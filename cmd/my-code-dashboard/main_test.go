@@ -6,7 +6,9 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -127,5 +129,105 @@ func TestServeDemoAndShutdown(t *testing.T) {
 	}
 	if _, err := client.Get(address + "/healthz"); err == nil {
 		t.Fatal("listener still accepts requests after shutdown")
+	}
+}
+
+func TestServeWithLongRunningBrowserOpener(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("exercises the Linux xdg-open command")
+	}
+	for _, blocked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "immediate exit", true: "browser still running"}[blocked], func(t *testing.T) {
+			dir := t.TempDir()
+			opener := filepath.Join(dir, "xdg-open")
+			const script = `#!/bin/sh
+opener_dir=${0%/*}
+printf '%s\n' "$1" > "$opener_dir/started"
+while [ ! -e "$opener_dir/release" ]; do /bin/sleep 0.02; done
+: > "$opener_dir/exited"
+`
+			if err := os.WriteFile(opener, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			release := func() {
+				if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0600); err != nil {
+					t.Error(err)
+				}
+			}
+			if !blocked {
+				release()
+			}
+			waitForFile := func(name string) bool {
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+						return true
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				return false
+			}
+			s, err := store.Open(filepath.Join(dir, "dashboard.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			e := engine.New(ctx, s, secret.NewMemory(), true)
+			addresses := make(addressWriter, 1)
+			finished := make(chan error, 1)
+			go func() {
+				finished <- serve(ctx, cancel, s, e, serveOptions{dataDir: dir, addr: "127.0.0.1:0", demo: true, noSchedule: true, openBrowser: true}, addresses)
+				close(finished)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				release()
+				select {
+				case err := <-finished:
+					if err != nil {
+						t.Error(err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Error("serve did not shut down after releasing opener")
+				}
+				if !waitForFile("exited") {
+					t.Error("fake opener did not exit")
+				}
+				s.Close()
+			})
+			var address string
+			select {
+			case address = <-addresses:
+			case <-time.After(10 * time.Second):
+				t.Fatal("serve did not start")
+			}
+			if !waitForFile("started") {
+				t.Fatal("fake opener was not launched")
+			}
+			client := &http.Client{Timeout: time.Second}
+			response, err := client.Get(address + "/healthz")
+			if err != nil {
+				t.Fatalf("HTTP serving blocked by browser opener: %v", err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("health status = %d", response.StatusCode)
+			}
+			cancel()
+			select {
+			case err := <-finished:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("shutdown blocked by browser opener")
+			}
+			if blocked {
+				if _, err := os.Stat(filepath.Join(dir, "exited")); !os.IsNotExist(err) {
+					t.Fatal("opener exited before the release signal")
+				}
+			}
+		})
 	}
 }

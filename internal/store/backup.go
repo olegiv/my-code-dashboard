@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/olegiv/my-code-dashboard/internal/model"
 )
@@ -58,29 +60,49 @@ func readSchema(db *sql.DB) ([]schemaObject, error) {
 	return objects, rows.Err()
 }
 
-func validateBackupConnections(db *sql.DB) error {
+func validateBackupConnections(db *sql.DB) (map[string]model.Connection, error) {
 	rows, err := db.Query("SELECT id,data FROM connections")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
-	seen := map[string]bool{}
+	connections := map[string]model.Connection{}
 	for rows.Next() {
 		var id, data any
 		if err = rows.Scan(&id, &data); err != nil {
-			return err
+			return nil, err
 		}
 		// Scan into native values: converting a BLOB key to string would hide
 		// that text-key upserts do not update that same SQLite row.
 		key, textKey := id.(string)
 		raw, textData := data.(string)
 		var connection model.Connection
-		if !textKey || !textData || key == "" || json.Unmarshal([]byte(raw), &connection) != nil || connection.ID != key || seen[connection.ID] {
-			return errors.New("backup has inconsistent connection identities")
+		if !textKey || !textData || key == "" || json.Unmarshal([]byte(raw), &connection) != nil || connection.ID != key || connections[connection.ID].ID != "" {
+			return nil, errors.New("backup has inconsistent connection identities")
 		}
-		seen[connection.ID] = true
+		connections[connection.ID] = connection
 	}
-	return rows.Err()
+	return connections, rows.Err()
+}
+
+func validBackupProviderURL(raw string, connection model.Connection) bool {
+	if raw == "" {
+		return true
+	}
+	base := connection.BaseURL
+	switch connection.Provider {
+	case "github":
+		base = "https://github.com"
+	case "gitlab":
+	default:
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return false
+	}
+	origin, err := url.Parse(base)
+	return err == nil && origin.Scheme == "https" && origin.Hostname() != "" && origin.User == nil && strings.EqualFold(u.Host, origin.Host)
 }
 
 // Decode every row, including history outside the UI's paginated read limits.

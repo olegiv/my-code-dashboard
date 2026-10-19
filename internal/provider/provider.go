@@ -223,18 +223,67 @@ func (a *api) request(ctx context.Context, method, path string, body any, out an
 }
 
 func nextLink(h http.Header) string {
-	for _, part := range strings.Split(h.Get("Link"), ",") {
-		bits := strings.Split(part, ";")
-		if len(bits) < 2 {
-			continue
-		}
-		for _, rel := range bits[1:] {
-			if strings.TrimSpace(rel) == `rel="next"` {
-				return strings.Trim(strings.TrimSpace(bits[0]), "<>")
+	for _, header := range h.Values("Link") {
+		for _, part := range linkParts(header, ',') {
+			target, params, ok := strings.Cut(strings.TrimSpace(part), ">")
+			if !ok || !strings.HasPrefix(target, "<") {
+				continue
+			}
+			for _, param := range linkParts(params, ';') {
+				name, value, ok := strings.Cut(param, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(name), "rel") {
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if strings.HasPrefix(value, `"`) {
+					if len(value) < 2 || value[len(value)-1] != '"' {
+						break
+					}
+					var unquoted strings.Builder
+					quoted := value[1 : len(value)-1]
+					for i := 0; i < len(quoted); i++ {
+						if quoted[i] == '\\' && i+1 < len(quoted) {
+							i++
+						}
+						unquoted.WriteByte(quoted[i])
+					}
+					value = unquoted.String()
+				}
+				for _, relation := range strings.Fields(value) {
+					if strings.EqualFold(relation, "next") {
+						return strings.TrimPrefix(target, "<")
+					}
+				}
+				break // RFC 8288: only the first rel parameter has meaning.
 			}
 		}
 	}
 	return ""
+}
+
+// Link delimiters only separate values outside URI references and quoted strings.
+func linkParts(value string, separator byte) []string {
+	var parts []string
+	start := 0
+	inURI, quoted, escaped := false, false, false
+	for i := 0; i < len(value); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case quoted && value[i] == '\\':
+			escaped = true
+		case !inURI && value[i] == '"':
+			quoted = !quoted
+		case !quoted && value[i] == '<':
+			inURI = true
+		case !quoted && value[i] == '>':
+			inURI = false
+		case !inURI && !quoted && value[i] == separator:
+			parts = append(parts, value[start:i])
+			start = i + 1
+		}
+	}
+	return append(parts, value[start:])
 }
 
 func pages[T any](ctx context.Context, a *api, path string) ([]T, error) {

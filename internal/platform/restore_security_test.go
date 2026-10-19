@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -59,11 +60,85 @@ func TestRestoreRejectsCredentialQuarantineBypasses(t *testing.T) {
 			if !bytes.Equal(before, after) || settings.InstallationID != destinationID {
 				t.Fatal("rejected backup changed the destination database or identity")
 			}
-			copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*.sqlite"))
+			copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*"))
 			if len(copies) != 0 {
 				t.Fatal("rejected backup reached destination replacement preparation")
 			}
 		})
+	}
+}
+
+func TestRestoredFindingLinksStayWithinProvider(t *testing.T) {
+	for _, table := range []string{"findings", "repositories"} {
+		for _, tc := range []struct {
+			name, link, connection string
+			valid                  bool
+		}{
+			{name: "empty", valid: true},
+			{name: "GitLab HTTPS", link: "https://attacker.example/group/project/-/vulnerabilities/42", valid: true},
+			{name: "GitLab host case", link: "https://ATTACKER.example/group/project/-/vulnerabilities/42", valid: true},
+			{name: "GitLab configured port and subpath", link: "https://attacker.example:8443/gitlab/group/project/-/vulnerabilities/42", connection: `UPDATE connections SET data=json_set(data,'$.base_url','https://attacker.example:8443/gitlab');`, valid: true},
+			{name: "foreign host", link: "https://unrelated.example/phishing"},
+			{name: "lookalike host", link: "https://attacker.example.unrelated.example/phishing"},
+			{name: "HTTP", link: "http://attacker.example/vulnerabilities/42"},
+			{name: "credentials", link: "https://user@attacker.example/vulnerabilities/42"},
+			{name: "relative", link: "/vulnerabilities/42"},
+			{name: "network path", link: "//attacker.example/vulnerabilities/42"},
+			{name: "different port", link: "https://attacker.example:8443/vulnerabilities/42"},
+			{name: "GitHub HTTPS", link: "https://github.com/example/project/security/code-scanning/42", connection: `UPDATE connections SET data=json_set(data,'$.provider','github','$.base_url','https://github.com');`, valid: true},
+			{name: "GitHub foreign", link: "https://unrelated.example/phishing", connection: `UPDATE connections SET data=json_set(data,'$.provider','github','$.base_url','https://github.com');`},
+			{name: "GitHub forged base", link: "https://attacker.example/phishing", connection: `UPDATE connections SET data=json_set(data,'$.provider','github');`},
+		} {
+			t.Run(table+"/"+tc.name, func(t *testing.T) {
+				archive := restoreSecurityArchive(t, tc.connection+`UPDATE `+table+` SET data=json_set(data,'$.url','`+tc.link+`')`)
+				dir, _ := restoreSecurityDestination(t)
+				path := filepath.Join(dir, "dashboard.sqlite")
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = Restore(dir, archive)
+				if tc.valid {
+					if err != nil {
+						t.Fatal(err)
+					}
+					s, err := store.Open(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer s.Close()
+					var link string
+					if table == "findings" {
+						findings, err := s.Findings()
+						if err != nil || len(findings) != 1 {
+							t.Fatal("missing restored finding", err)
+						}
+						link = findings[0].URL
+					} else {
+						repos, err := s.Repositories()
+						if err != nil || len(repos) != 1 {
+							t.Fatal("missing restored repository", err)
+						}
+						link = repos[0].URL
+					}
+					if link != tc.link {
+						t.Fatalf("valid restored link changed: %q", link)
+					}
+					return
+				}
+				if err == nil {
+					t.Fatal("unsafe provider link was restored")
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatal("rejected archive changed the destination")
+				}
+				copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*"))
+				if len(copies) != 0 {
+					t.Fatal("unsafe archive reached destination replacement")
+				}
+			})
+		}
 	}
 }
 
@@ -111,6 +186,146 @@ func TestGenuineRestoreBlocksCredentialsAcrossRefreshAndRestart(t *testing.T) {
 		if credentials.reads != 0 || calls != 0 {
 			t.Fatal("restored discovery or refresh consumed a destination credential")
 		}
+	}
+}
+
+func TestRestoreRecoversUnhealthyDestination(t *testing.T) {
+	const archiveID = "00112233445566778899aabbccddeeff"
+	archive := restoreSecurityArchive(t, "UPDATE settings SET data=json_set(data,'$.installation_id','"+archiveID+"')")
+	for _, condition := range []string{"new", "healthy", "corrupt with sidecars", "newer schema", "invalid settings", "invalid identity", "newer schema with WAL", "orphan sidecars"} {
+		t.Run(condition, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, "dashboard.sqlite")
+			destinationID := ""
+			if condition != "new" && condition != "corrupt with sidecars" && condition != "orphan sidecars" {
+				seed := target
+				if condition == "newer schema with WAL" {
+					seed = filepath.Join(t.TempDir(), "dashboard.sqlite")
+				}
+				s, err := store.Open(seed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				settings, err := s.Settings()
+				if err != nil {
+					t.Fatal(err)
+				}
+				destinationID = settings.InstallationID
+				if condition == "invalid identity" {
+					settings.InstallationID = "invalid-local-identity"
+					if err = s.SaveSettings(settings); err != nil {
+						t.Fatal(err)
+					}
+					destinationID = ""
+				}
+				if condition == "newer schema with WAL" {
+					db, err := sql.Open("sqlite", seed)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = db.Exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA user_version=2;"); err != nil {
+						t.Fatal(err)
+					}
+					db.Close()
+					settings.InstallationID = model.NewID()
+					destinationID = settings.InstallationID
+					if err = s.SaveSettings(settings); err != nil {
+						t.Fatal(err)
+					}
+					for _, suffix := range []string{"", "-wal", "-shm"} {
+						data, err := os.ReadFile(seed + suffix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = os.WriteFile(target+suffix, data, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				s.Close()
+				if condition == "newer schema" || condition == "invalid settings" {
+					db, err := sql.Open("sqlite", target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					mutation := "PRAGMA user_version=2"
+					if condition == "invalid settings" {
+						mutation = "UPDATE settings SET data='invalid-json'"
+						destinationID = ""
+					}
+					if _, err = db.Exec(mutation); err != nil {
+						t.Fatal(err)
+					}
+					db.Close()
+				}
+			}
+			if condition == "corrupt with sidecars" || condition == "orphan sidecars" {
+				for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+					if condition == "orphan sidecars" && suffix == "" {
+						continue
+					}
+					if err := os.WriteFile(target+suffix, []byte("synthetic invalid SQLite bytes"+suffix), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			before := map[string][]byte{}
+			for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+				data, err := os.ReadFile(target + suffix)
+				if err == nil {
+					before[suffix] = data
+				} else if !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+			}
+			if err := Restore(dir, archive); err != nil {
+				t.Fatalf("valid backup cannot recover destination: %v", err)
+			}
+			copies, err := filepath.Glob(filepath.Join(dir, "before-restore-*"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(before) == 0 {
+				if len(copies) != 0 {
+					t.Fatal("new installation produced a recovery copy")
+				}
+			} else {
+				if len(copies) != 1 {
+					t.Fatalf("expected one recovery directory, got %d", len(copies))
+				}
+				info, err := os.Stat(copies[0])
+				if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+					t.Fatalf("recovery directory is not private: %v", err)
+				}
+				for suffix, want := range before {
+					data, err := os.ReadFile(filepath.Join(copies[0], "dashboard.sqlite"+suffix))
+					if err != nil || (suffix != "-shm" && !bytes.Equal(data, want)) {
+						t.Fatalf("previous database file %q was not preserved: %v", suffix, err)
+					}
+				}
+			}
+			for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+				if _, err := os.Stat(target + suffix); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("old SQLite sidecar %q remains at the restored path", suffix)
+				}
+			}
+			s, err := store.Open(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err := s.Settings()
+			if err != nil || (destinationID != "" && settings.InstallationID != destinationID) || settings.InstallationID == archiveID {
+				t.Fatalf("restore lost local identity or adopted imported identity: %+v %v", settings, err)
+			}
+			if decoded, err := hex.DecodeString(settings.InstallationID); err != nil || len(decoded) != 16 {
+				t.Fatal("restore generated an invalid credential namespace")
+			}
+			credentials, calls := refreshRestoredSelection(t, s)
+			s.Close()
+			if credentials.reads != 0 || calls != 0 {
+				t.Fatal("recovery reused a credential or contacted a provider")
+			}
+		})
 	}
 }
 

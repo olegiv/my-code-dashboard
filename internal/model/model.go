@@ -111,7 +111,7 @@ type CollectionOutcome struct {
 func (r Run) Attention() []CollectionOutcome {
 	var outcomes []CollectionOutcome
 	for _, outcome := range r.Outcomes {
-		if outcome.Collection != "success" && outcome.Collection != "unsupported" || outcome.ScannerState == "warning" || outcome.ScannerState == "disabled" {
+		if outcome.Collection != "success" && outcome.Collection != "unsupported" || outcome.ScannerState == "warning" || outcome.ScannerState == "disabled" || outcome.ScannerState == "enabled" {
 			outcomes = append(outcomes, outcome)
 		}
 	}

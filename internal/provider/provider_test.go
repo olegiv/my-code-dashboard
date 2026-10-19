@@ -32,6 +32,60 @@ func mockAPI(t *testing.T, h http.HandlerFunc) *api {
 	return newAPI(server.URL, "synthetic-token-not-real")
 }
 
+func TestPaginationLinkDelimiters(t *testing.T) {
+	const target = "https://api.example/alerts?state=open,fixed&cursor=a;b&page=2"
+	for _, tc := range []struct {
+		name  string
+		links []string
+		want  string
+	}{
+		{"URI delimiters", []string{"<" + target + `>; rel="next"`}, target},
+		{"encoded URI", []string{`<https://api.example/alerts?state=open%2Cfixed&page=2>; rel="next"`}, "https://api.example/alerts?state=open%2Cfixed&page=2"},
+		{"no separator space", []string{`<https://api.example/alerts?page=1>; rel="prev",<` + target + `>; rel="next"`}, target},
+		{"quoted attributes", []string{`<https://api.example/alerts?page=1>; title="literal , ; < > \" text"; rel="prev",` + "\t<" + target + `>; title="commas, semicolons; brackets<>"; rel="next"`}, target},
+		{"relation list", []string{"<" + target + `>; rel="alternate next"`}, target},
+		{"unquoted relation", []string{"<" + target + ">; rel=next"}, target},
+		{"quoted pair", []string{"<" + target + `>; rel="\next"`}, target},
+		{"first relation wins", []string{"<" + target + `>; rel="prev"; rel="next"`}, ""},
+		{"header fields", []string{`<https://api.example/alerts?page=1>; rel="prev"`, "<" + target + `>; rel="next"`}, target},
+		{"ordinary last page", []string{`<https://api.example/alerts?page=1>; rel="prev"`}, ""},
+		{"no header", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{"Link": tc.links}
+			if got := nextLink(h); got != tc.want {
+				t.Fatalf("next Link = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	for _, state := range []string{"open,fixed,dismissed", "open%2Cfixed%2Cdismissed"} {
+		t.Run("two pages "+state, func(t *testing.T) {
+			calls := 0
+			var a *api
+			a = mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Query().Get("state") != "open,fixed,dismissed" {
+					t.Error("pagination changed the state filter")
+				}
+				if r.URL.Query().Get("page") == "2" {
+					jsonReply(w, []int{101})
+					return
+				}
+				w.Header().Set("Link", "<"+a.base+"/alerts?state="+state+`&page=2>; rel="next"`)
+				page := make([]int, 100)
+				for i := range page {
+					page[i] = i + 1
+				}
+				jsonReply(w, page)
+			})
+			items, err := pages[int](t.Context(), a, "/alerts?state="+state)
+			if err != nil || calls != 2 || len(items) != 101 || items[100] != 101 {
+				t.Fatalf("incomplete pagination: calls=%d items=%d err=%v", calls, len(items), err)
+			}
+		})
+	}
+}
+
 func TestRepositoryMetadataPreservesImmutableIdentity(t *testing.T) {
 	for _, kind := range []string{"github", "gitlab"} {
 		t.Run(kind, func(t *testing.T) {
@@ -465,6 +519,52 @@ func TestGitHubLifecycleAnalysisEvidenceAndUnknownSeverity(t *testing.T) {
 	s := g.code(context.Background(), "repos/example/repository/", "main")
 	if !s.Complete || s.Findings[0].Severity != "unknown" || s.Findings[0].DiagnosticSeverity != "error" || s.Coverage.Commit != "old" || s.Coverage.AnalysisAt.Format(time.RFC3339) != "2026-10-17T08:00:00Z" {
 		t.Fatalf("analysis streams collapsed incorrectly: %+v", s)
+	}
+}
+
+func TestGitHubLastSuccessfulAnalysisPerStream(t *testing.T) {
+	const oldSuccess = `{"created_at":"2026-10-15T09:00:00Z","ref":"refs/heads/main","commit_sha":"old-success","tool":{"name":"A"},"category":"go"}`
+	const newSuccess = `{"created_at":"2026-10-19T09:00:00Z","ref":"refs/heads/main","commit_sha":"new-success","tool":{"name":"B"},"category":"config"}`
+	const failedUpload = `{"created_at":"2026-10-19T10:00:00Z","ref":"refs/heads/main","commit_sha":"failed-upload","error":"synthetic upload error","tool":{"name":"A"},"category":"go"}`
+	const warningUpload = `{"created_at":"2026-10-19T10:00:00Z","ref":"refs/heads/main","commit_sha":"warning-success","warning":"synthetic warning","tool":{"name":"B"},"category":"config"}`
+	for _, tc := range []struct {
+		name, analyses, date, commit, state string
+	}{
+		{"successful streams", oldSuccess + "," + newSuccess, "2026-10-15T09:00:00Z", "old-success", "observed"},
+		{"failed upload retains stream success", newSuccess + "," + failedUpload + "," + oldSuccess, "2026-10-15T09:00:00Z", "old-success", "warning"},
+		{"all latest uploads failed", failedUpload + "," + oldSuccess, "2026-10-15T09:00:00Z", "old-success", "warning"},
+		{"stream without success", failedUpload + "," + newSuccess, "2026-10-19T09:00:00Z", "new-success", "warning"},
+		{"no successful analysis", failedUpload, "", "", "warning"},
+		{"successful warning", warningUpload, "2026-10-19T10:00:00Z", "warning-success", "warning"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := github{browser: "https://github.com"}
+			g.api = mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "analyses"):
+					fmt.Fprint(w, "["+tc.analyses+"]")
+				case strings.HasSuffix(r.URL.Path, "alerts"):
+					fmt.Fprint(w, `[]`)
+				default:
+					w.WriteHeader(http.StatusForbidden)
+				}
+			})
+			snap := g.code(t.Context(), "repos/example/repository/", "main")
+			wantTime := time.Time{}
+			if tc.date != "" {
+				var err error
+				wantTime, err = time.Parse(time.RFC3339, tc.date)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !snap.Complete || !snap.Coverage.AnalysisAt.Equal(wantTime) || snap.Coverage.Commit != tc.commit || snap.Coverage.ScannerState != tc.state {
+				t.Fatalf("last successful stream evidence = %+v", snap.Coverage)
+			}
+			if tc.date != "" && snap.Coverage.Ref != "refs/heads/main" {
+				t.Fatal("analysis ref omitted")
+			}
+		})
 	}
 }
 

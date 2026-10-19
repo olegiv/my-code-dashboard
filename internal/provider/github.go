@@ -193,8 +193,12 @@ func (g *github) code(ctx context.Context, path, branch string) model.Snapshot {
 		s.Findings = append(s.Findings, model.Finding{ID: strconv.Itoa(v.Number), Source: "github-code", Category: "code", Title: v.Rule.Description, Severity: model.Severity(v.Rule.SecuritySeverity), NativeSeverity: v.Rule.SecuritySeverity, DiagnosticSeverity: v.Rule.Severity, State: model.State(v.State), NativeState: v.State, URL: SafeURL(v.HTMLURL, g.browser), Scanner: v.Tool.Name, Identifiers: []string{v.Rule.ID}, Scope: v.Instance.Ref, Commit: v.Instance.Commit})
 	}
 	analyses, err := pages[ghAnalysis](ctx, g.api, path+"code-scanning/analyses?"+query.Encode())
-	if err == nil && len(analyses) > 0 {
+	if err != nil {
+		return failed("code", err)
+	}
+	if len(analyses) > 0 {
 		latest := map[string]ghAnalysis{}
+		successful := map[string]ghAnalysis{}
 		var oldest time.Time
 		issues := 0
 		for _, a := range analyses {
@@ -203,21 +207,25 @@ func (g *github) code(ctx context.Context, path, branch string) model.Snapshot {
 			if !ok || a.CreatedAt.After(prior.CreatedAt) {
 				latest[key] = a
 			}
+			if a.Error == "" {
+				prior, ok := successful[key]
+				if !ok || a.CreatedAt.After(prior.CreatedAt) {
+					successful[key] = a
+				}
+			}
 		}
 		for _, a := range latest {
-			if a.Error != "" {
+			if a.Error != "" || a.Warning != "" {
 				issues++
-				continue
 			}
+		}
+		for _, a := range successful {
 			if oldest.IsZero() || a.CreatedAt.Before(oldest) {
 				oldest = a.CreatedAt
 			}
 			if a.CreatedAt.Equal(oldest) {
 				s.Coverage.Ref = a.Ref
 				s.Coverage.Commit = a.Commit
-			}
-			if a.Warning != "" {
-				issues++
 			}
 		}
 		s.Coverage.AnalysisAt = oldest

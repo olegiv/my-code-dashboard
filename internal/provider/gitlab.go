@@ -423,5 +423,8 @@ func (g *gitlab) scannerCoverage(ctx context.Context, r model.Repository, schema
 			s.Coverage.ScannerState = "observed"
 		}
 		s.Coverage.Note = "Scanner state comes from project securityScanners (available/enabled/latest pipeline success). The report does not expose a per-scanner analysis timestamp. IaC may be included in SAST; category parity is not implied."
+		if s.Coverage.ScannerState == "enabled" {
+			s.Coverage.Note += " The scanner is enabled, but no successful run is reported for the latest pipeline."
+		}
 	}
 }

@@ -432,7 +432,8 @@ func ValidateBackup(path string) error {
 	if err = validateBackupSchema(db); err != nil {
 		return err
 	}
-	if err = validateBackupConnections(db); err != nil {
+	connections, err := validateBackupConnections(db)
+	if err != nil {
 		return err
 	}
 	var raw string
@@ -452,7 +453,12 @@ func ValidateBackup(path string) error {
 	if _, err = time.LoadLocation(settings.Timezone); err != nil {
 		return errors.New("backup has an invalid timezone")
 	}
+	repositoryConnections := map[string]model.Connection{}
 	if err = validateBackupRecords(db, "SELECT data,id,connection_id,external_id,selected FROM repositories", func(r model.Repository) []any {
+		if !validBackupProviderURL(r.URL, connections[r.ConnectionID]) {
+			return nil
+		}
+		repositoryConnections[r.ID] = connections[r.ConnectionID]
 		var selected int64
 		if r.Selected {
 			selected = 1
@@ -467,6 +473,9 @@ func ValidateBackup(path string) error {
 		return err
 	}
 	if err = validateBackupRecords(db, "SELECT data,repository_id,source,external_id,category,severity,state FROM findings", func(f model.Finding) []any {
+		if !validBackupProviderURL(f.URL, repositoryConnections[f.RepositoryID]) {
+			return nil
+		}
 		return []any{f.RepositoryID, f.Source, f.ID, f.Category, f.Severity, f.State}
 	}); err != nil {
 		return err

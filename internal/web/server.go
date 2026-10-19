@@ -310,7 +310,7 @@ func (s *Server) view(r *http.Request, page, title string) (View, error) {
 			if c.LastSuccess.After(row.LastSuccess) {
 				row.LastSuccess = c.LastSuccess
 			}
-			if (c.Collection != "success" && c.Collection != "unsupported") || c.ScannerState == "warning" || c.ScannerState == "disabled" {
+			if (c.Collection != "success" && c.Collection != "unsupported") || c.ScannerState == "warning" || c.ScannerState == "disabled" || c.ScannerState == "enabled" {
 				row.Issues++
 				if repo.Selected {
 					v.Issues++

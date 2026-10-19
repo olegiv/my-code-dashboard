@@ -175,6 +175,7 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		if closeErr != nil {
+			_ = os.Remove(*output)
 			return closeErr
 		}
 		fmt.Fprintln(out, "Backup created; provider credentials are excluded.")
@@ -249,11 +250,13 @@ func serve(ctx context.Context, cancel context.CancelFunc, s *store.Store, e *en
 		fmt.Fprintln(out, "Synthetic demo: no credentials or external API calls.")
 	}
 	if options.openBrowser {
-		if runtime.GOOS == "darwin" {
-			_ = exec.Command("/usr/bin/open", url).Run()
-		} else {
-			_ = exec.Command("xdg-open", url).Run()
-		}
+		go func() {
+			if runtime.GOOS == "darwin" {
+				_ = exec.Command("/usr/bin/open", url).Run()
+			} else {
+				_ = exec.Command("xdg-open", url).Run()
+			}
+		}()
 	}
 	if !options.noSchedule {
 		go e.Schedule(ctx)
