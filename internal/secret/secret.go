@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -45,7 +46,8 @@ func (k Keyring) Delete(id string) error {
 type Files struct{ Directory string }
 
 func (f Files) Get(id string) (string, error) {
-	if filepath.Base(id) != id || id == "." {
+	// Match the headless CLI's credential filename contract before either file access.
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`).MatchString(id) {
 		return "", errors.New("invalid credential identifier")
 	}
 	path := filepath.Join(f.Directory, id)

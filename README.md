@@ -4,6 +4,8 @@ Self-hosted security dashboard for GitHub and GitLab repositories, built with Go
 
 One local dashboard for existing security reports, coverage, refresh health, and changes. Runs as a native binary with embedded browser assets and SQLite. No Node.js, npm, CDN, AI service, Docker, or C compiler is required.
 
+**Run v1 only on a trusted single-user machine.** There is no application login: other local accounts and processes can access the loopback dashboard and download backups. Loopback binding and CSRF checks do not authenticate local clients. Authentication is deferred; shared-host and internet-facing deployment are unsupported. See [the security policy](SECURITY.md).
+
 ## Run it
 
 Go **1.26.9** is the minimum supported compiler and the pinned, security-patched build toolchain. Make targets and the release script select this version even when a newer Go is installed; Go downloads it if needed. The binary needs no Go installation at runtime.

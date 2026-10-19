@@ -1,5 +1,7 @@
 # Operations
 
+Run v1 only on a trusted single-user machine, including a dedicated headless machine. There is no application login. Other local accounts and processes can access the loopback dashboard and download backups; private database permissions do not prevent this HTTP access. Shared hosts and internet-facing deployment are unsupported while authentication is deferred. See [the security policy](../SECURITY.md).
+
 ## macOS
 
 Build with `make build`, which selects the security-patched Go 1.26.9 toolchain, then run `bin/my-code-dashboard --open`. The default address is `127.0.0.1:7364`; `--addr '[::1]:7364'` is available for IPv6. Public listeners are rejected. `--data-dir '/absolute/private/path'` selects another independent installation; use a different port too. Do not place runtime data in a source checkout.
@@ -64,7 +66,7 @@ my-code-dashboard serve \
   --credential-dir /private/path/credentials
 ```
 
-Then use the GUI to discover/select repositories. A credential ID is also the filename supplied by systemd. The app automatically honors `CREDENTIALS_DIRECTORY`. Headless tokens are changed/revoked outside the browser app, and no credential is written by its GUI.
+Then use the GUI to discover/select repositories. A credential ID is also the filename supplied by systemd: 1–100 ASCII letters, digits, dots, underscores or hyphens, starting with a letter or digit. Both provisioning and file reads enforce this rule; paths and encoded separators are rejected. The app automatically honors `CREDENTIALS_DIRECTORY`. Headless tokens are changed/revoked outside the browser app, and no credential is written by its GUI.
 
 [my-code-dashboard.service](examples/my-code-dashboard.service) is a **per-user** systemd example. Customize the binary path, credential entries, and private data directory before enabling it. Provision connection metadata into the same directory first. The example is not installed automatically. To reach a remote loopback installation privately, an SSH tunnel is one option:
 
@@ -72,7 +74,7 @@ Then use the GUI to discover/select repositories. A credential ID is also the fi
 ssh -L 7364:127.0.0.1:7364 user@example.com
 ```
 
-Internet-facing operation needs a separate design for authentication, authorization, HTTPS, session management, proxy trust, and access restrictions. This app intentionally enforces loopback and has no user login. Obtain explicit permission before storing corporate findings on a personal server. Do not treat a reverse proxy alone as access control.
+The SSH tunnel protects the network connection; it does not authenticate clients on the server's loopback interface. Keep the host dedicated to trusted single-user use. Internet-facing operation needs a separate design for authentication, authorization, HTTPS, session management, proxy trust, and access restrictions. This app intentionally enforces loopback and has no user login. Obtain explicit permission before storing corporate findings on a personal server. Do not treat a reverse proxy alone as access control.
 
 ## Retention and troubleshooting
 

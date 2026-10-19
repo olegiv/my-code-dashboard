@@ -259,7 +259,7 @@ func (g *github) secrets(ctx context.Context, path string) model.Snapshot {
 	seen := map[int]bool{}
 	// The default excludes generic patterns. Complete both streams before replacing
 	// a category, batching the documented selectors to avoid nine extra API calls.
-	selectors := []string{"http_basic_authentication_header", "http_bearer_authentication_header", "mongodb_connection_string", "mysql_connection_string", "postgres_connection_string", "openssh_private_key", "rsa_private_key", "ec_private_key", "pgp_private_key"}
+	selectors := []string{"http_basic_authentication_header", "http_bearer_authentication_header", "mongodb_connection_string", "mysql_connection_url", "postgres_connection_string", "openssh_private_key", "rsa_private_key", "ec_private_key", "pgp_private_key"}
 	more, e := pages[ghSecret](ctx, g.api, path+"secret-scanning/alerts?hide_secret=true&per_page=100&secret_type="+url.QueryEscape(strings.Join(selectors, ",")))
 	if e != nil {
 		return githubFailed("secrets", e)

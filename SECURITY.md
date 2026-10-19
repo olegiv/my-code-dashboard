@@ -1,6 +1,6 @@
 # Security policy
 
-This is a local, single-user report aggregator. The current development series is supported through fixes on the default branch; there is no published stable release yet.
+This is a local report aggregator for trusted single-user machines only. The current development series is supported through fixes on the default branch; there is no published stable release yet.
 
 ## Reporting
 
@@ -15,7 +15,7 @@ Include the version, platform, synthetic reproduction, impact, and affected trus
 - Provider URLs require HTTPS. Requests and pagination cannot move credentials to another origin. System trust handles corporate CAs; there is no insecure TLS switch.
 - Secrets are held in the OS credential backend or external private files. No automatic plaintext fallback exists. Finding response fields are allowlisted; secret values, locations, raw responses, and source snippets are not persisted.
 - SQLite and backup files contain sensitive report data without application-level encryption. Use an encrypted disk, private account, and protected backups.
-- Local applications running as the same OS user and browser extensions with broad access are outside the authentication boundary. There is no multi-user/server authentication.
+- There is no application authentication. Every local account and process able to connect to the loopback listener can read dashboard data and download backups. CSRF, Host checks and private file permissions do not authenticate HTTP clients. Authentication is deferred; shared-host and internet-facing deployment are unsupported until it is added. Trust all local accounts/processes and browser extensions with broad access.
 
 Security review should prioritize credential leakage, finding redaction, HTML/URL injection, CSRF/DNS rebinding, unsafe provider redirects, incomplete pagination interpreted as clean results, false resolution, archive traversal, and disclosure through build artifacts or fixtures. Availability failures must retain data and remain visible. Tests must never use real credentials, corporate identifiers, production databases, or live scanner executions.
 

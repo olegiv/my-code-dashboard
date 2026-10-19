@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -302,6 +303,41 @@ func TestGitHubSecretValuesAreNeverImported(t *testing.T) {
 	s = g.secrets(context.Background(), "repos/example/repository/")
 	if s.Complete || s.Coverage.Collection != "denied" || len(s.Findings) != 0 {
 		t.Fatal("partial secret stream committed as complete")
+	}
+}
+
+func TestGitHubMySQLGenericSecretSelector(t *testing.T) {
+	for _, hasAlert := range []bool{false, true} {
+		t.Run(fmt.Sprint(hasAlert), func(t *testing.T) {
+			want := 0
+			if hasAlert {
+				want = 1
+			}
+			a := mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				selectors := r.URL.Query().Get("secret_type")
+				if selectors != "" && !slices.Contains(strings.Split(selectors, ","), "mysql_connection_url") {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					return
+				}
+				if selectors != "" && hasAlert {
+					fmt.Fprint(w, `[{"number":19,"state":"open","secret_type":"mysql_connection_url","secret_type_display_name":"MySQL connection URL","secret":"SYNTHETIC_MYSQL_SECRET"}]`)
+					return
+				}
+				fmt.Fprint(w, `[]`)
+			})
+			g := github{api: a, browser: "https://github.com"}
+			snapshot := g.secrets(context.Background(), "repos/example/repository/")
+			if !snapshot.Complete || len(snapshot.Findings) != want {
+				t.Fatalf("MySQL stream: complete=%v findings=%d", snapshot.Complete, len(snapshot.Findings))
+			}
+			if hasAlert && (snapshot.Findings[0].State != "open" || snapshot.Findings[0].Title != "MySQL connection URL exposed") {
+				t.Fatalf("active MySQL alert lost: %+v", snapshot.Findings)
+			}
+			raw, _ := json.Marshal(snapshot)
+			if strings.Contains(string(raw), "SYNTHETIC_MYSQL_SECRET") {
+				t.Fatal("literal MySQL credential imported")
+			}
+		})
 	}
 }
 

@@ -42,4 +42,24 @@ func TestProvisionedFilesRejectUnsafeOrPublicCredentials(t *testing.T) {
 	if f.Set("id", "value") == nil || f.Delete("id") == nil {
 		t.Fatal("browser must not mutate provisioned files")
 	}
+	for _, id := range []string{"github-personal", "7e797f01-e9aa-4e28-b59d-3a08163bb95c", "gitlab.v1_2", "a..b", strings.Repeat("a", 100)} {
+		if err := os.WriteFile(filepath.Join(dir, id), []byte("synthetic-only"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := f.Get(id); err != nil || got != "synthetic-only" {
+			t.Errorf("supported identifier %q rejected: %v", id, err)
+		}
+	}
+	for _, id := range []string{"", ".", "..", "../synthetic", "/synthetic", `..\synthetic`, "nested/synthetic", "with space", "-leading", "with\nnewline", "credential%2fother", strings.Repeat("a", 101)} {
+		// Files with syntactically invalid leaf names must still be rejected even
+		// when they exist and have private permissions.
+		if id != "" && id != "." && id != ".." && !strings.ContainsAny(id, `/\`) {
+			if err := os.WriteFile(filepath.Join(dir, id), []byte("synthetic-only"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := f.Get(id); err == nil {
+			t.Errorf("invalid credential identifier %q accepted", id)
+		}
+	}
 }
