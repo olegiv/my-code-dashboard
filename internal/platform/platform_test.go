@@ -10,13 +10,108 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/olegiv/my-code-dashboard/internal/model"
 	"github.com/olegiv/my-code-dashboard/internal/store"
 )
+
+type backupWriter struct {
+	data               bytes.Buffer
+	writeErr, closeErr error
+	closes             int
+}
+
+func (w *backupWriter) Write(p []byte) (int, error) {
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
+	return w.data.Write(p)
+}
+func (w *backupWriter) Close() error { w.closes++; return w.closeErr }
+
+func TestBackupCopyPropagatesCloseErrors(t *testing.T) {
+	copyErr, closeErr := errors.New("synthetic copy failure"), errors.New("synthetic close failure")
+	for _, tc := range []struct {
+		name               string
+		writeErr, closeErr error
+		want               error
+	}{
+		{"normal", nil, nil, nil},
+		{"copy", copyErr, nil, copyErr},
+		{"close", nil, closeErr, closeErr},
+		{"copy and close", copyErr, closeErr, copyErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &backupWriter{writeErr: tc.writeErr, closeErr: tc.closeErr}
+			if err := copyAndClose(w, strings.NewReader("synthetic database bytes")); !errors.Is(err, tc.want) {
+				t.Fatalf("got %v; want %v", err, tc.want)
+			}
+			if w.closes != 1 || tc.writeErr == nil && w.data.String() != "synthetic database bytes" {
+				t.Fatal("copy did not write expected bytes and close exactly once")
+			}
+		})
+	}
+}
+
+func TestInstallPlistAtomically(t *testing.T) {
+	if path := os.Getenv("MCD_PLIST_FAULT_PATH"); path != "" {
+		// Only this child process receives a file-size limit. Never touch a
+		// real LaunchAgent, host resource limits, or service configuration.
+		signal.Ignore(syscall.SIGXFSZ)
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 128, Max: 128}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writePlist(path, bytes.Repeat([]byte("x"), 4096)); !errors.Is(err, syscall.EFBIG) {
+			t.Fatalf("expected a real partial-write size-limit failure, got %v", err)
+		}
+		return
+	}
+	for _, name := range []string{"new", "replacement", "partial write"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "service.plist")
+			before := []byte("<plist>previous definition</plist>")
+			if name != "new" {
+				if err := os.WriteFile(path, before, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := []byte("<plist>replacement definition</plist>")
+			if name == "partial write" {
+				executable, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestInstallPlistAtomically$")
+				cmd.Env = []string{"MCD_PLIST_FAULT_PATH=" + path}
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("fault child failed: %v\n%s", err, output)
+				}
+				want = before
+			} else if err := writePlist(path, want); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("installed definition changed unexpectedly: %q, %v", got, err)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatal("definition is not private", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatal("publication left temporary files", err)
+			}
+		})
+	}
+}
 
 func TestLockAndIndependentDirectories(t *testing.T) {
 	dir := t.TempDir()

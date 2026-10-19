@@ -3,9 +3,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,192 @@ import (
 	"github.com/olegiv/my-code-dashboard/internal/secret"
 	"github.com/olegiv/my-code-dashboard/internal/store"
 )
+
+func TestRefreshResumesInterruptedPortfolio(t *testing.T) {
+	for _, mode := range []string{"normal", "manual restart", "scheduled restart", "changed selection"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakeProvider{}
+			e, connection := engineFixture(t, t.Context(), p)
+			if err := e.Store.SaveDiscovered(connection, []model.Repository{
+				{ExternalID: "1", Name: "example/a"},
+				{ExternalID: "2", Name: "example/b"},
+				{ExternalID: "3", Name: "example/c"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			repos, _ := e.Store.Repositories()
+			selection := map[string]bool{}
+			snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code", ScannerState: "observed"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}
+			for _, repo := range repos {
+				selection[repo.ID] = true
+				if err := e.Store.Apply(repo, snapshot, e.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := e.Store.SelectRepositories(selection); err != nil {
+				t.Fatal(err)
+			}
+			var calls []string
+			p.collect = func(ctx context.Context, repo model.Repository) []model.Snapshot {
+				calls = append(calls, repo.Name)
+				if mode != "normal" {
+					<-ctx.Done()
+					return []model.Snapshot{{Coverage: model.Coverage{Category: "code", Collection: "error", Note: "Synthetic deadline."}}}
+				}
+				return []model.Snapshot{snapshot}
+			}
+			// An inherited deadline exercises the same interruption path as the
+			// 30-minute budget, without waiting 30 minutes or calling a provider.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			e.ctx = ctx
+			if _, _, err := e.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			e.Wait()
+			settings, _ := e.Store.Settings()
+			raw, _ := json.Marshal(settings)
+			var saved map[string]any
+			_ = json.Unmarshal(raw, &saved)
+			cursor, _ := saved["resume_after_repository_id"].(string)
+			runs, _ := e.Store.Runs()
+			if mode == "normal" {
+				if !slices.Equal(calls, []string{"example/a", "example/b", "example/c"}) || cursor != "" || runs[0].Status != "success" {
+					t.Fatal("normal portfolio order/completion changed", calls, cursor, runs)
+				}
+			} else if !slices.Equal(calls, []string{"example/a"}) || cursor != repos[0].ID || runs[0].Status != "interrupted" {
+				t.Error("interruption did not checkpoint the attempted repository", calls, cursor, runs[0].Status)
+			}
+			findings, _ := e.Store.Findings()
+			if len(findings) != 3 {
+				t.Fatal("interrupted refresh lost prior findings")
+			}
+			for _, finding := range findings {
+				if finding.State != "open" || finding.Missing {
+					t.Fatal("interrupted or unprocessed findings changed", finding)
+				}
+			}
+			if mode == "changed selection" {
+				delete(selection, repos[1].ID)
+				if err := e.Store.SelectRepositories(selection); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backup := filepath.Join(t.TempDir(), "backup.sqlite")
+			if err := e.Store.Backup(t.Context(), backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ValidateBackup(backup); err != nil {
+				t.Fatal("refresh progress made a valid installation unrestorable", err)
+			}
+			path := e.Store.Path
+			if err := e.Store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			next := New(t.Context(), reopened, e.Secrets, false)
+			now := e.Now().Add(time.Hour)
+			next.Now = func() time.Time { return now }
+			calls = nil
+			p.collect = func(_ context.Context, repo model.Repository) []model.Snapshot {
+				calls = append(calls, repo.Name)
+				return []model.Snapshot{snapshot}
+			}
+			next.Factory = func(model.Connection, string) (provider.Provider, error) { return p, nil }
+			if mode == "scheduled restart" {
+				err = next.Tick(now)
+			} else {
+				_, _, err = next.Start("manual")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			next.Wait()
+			want := []string{"example/b", "example/c", "example/a"}
+			switch mode {
+			case "normal":
+				want = []string{"example/a", "example/b", "example/c"}
+			case "changed selection":
+				want = []string{"example/c", "example/a"}
+			}
+			if !slices.Equal(calls, want) {
+				t.Errorf("restart did not visit the pending tail first: got %v, want %v", calls, want)
+			}
+			settings, _ = reopened.Settings()
+			raw, _ = json.Marshal(settings)
+			clear(saved)
+			_ = json.Unmarshal(raw, &saved)
+			if cursor, _ = saved["resume_after_repository_id"].(string); cursor != "" {
+				t.Fatal("complete refresh did not clear its resume cursor")
+			}
+			calls = nil
+			if _, _, err = next.Start("manual"); err != nil {
+				t.Fatal(err)
+			}
+			next.Wait()
+			if mode == "changed selection" {
+				want = []string{"example/a", "example/c"}
+			} else {
+				want = []string{"example/a", "example/b", "example/c"}
+			}
+			if !slices.Equal(calls, want) {
+				t.Fatal("completed portfolios did not return to ordinary ordering", calls)
+			}
+		})
+	}
+	for _, mode := range []string{"removed cursor", "deselected cursor", "empty selection", "independent installation"} {
+		t.Run(mode, func(t *testing.T) {
+			e, c := engineFixture(t, t.Context(), &fakeProvider{})
+			if err := e.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "1", Name: "example/a"}, {ExternalID: "2", Name: "example/b"}}); err != nil {
+				t.Fatal(err)
+			}
+			repos, err := e.Store.Repositories()
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected := map[string]bool{repos[0].ID: true, repos[1].ID: true}
+			cursor := repos[1].ID
+			want := []string{"example/a", "example/b"}
+			switch mode {
+			case "removed cursor":
+				cursor = "removed-repository"
+			case "deselected cursor":
+				delete(selected, cursor)
+				want = []string{"example/a"}
+			case "empty selection":
+				clear(selected)
+				want = nil
+			case "independent installation":
+				other, _ := engineFixture(t, t.Context(), &fakeProvider{})
+				if err = other.saveRefreshResume(repos[0].ID); err != nil {
+					t.Fatal(err)
+				}
+				cursor = ""
+			}
+			if err = e.Store.SelectRepositories(selected); err != nil {
+				t.Fatal(err)
+			}
+			if err = e.saveRefreshResume(cursor); err != nil {
+				t.Fatal(err)
+			}
+			ordered, err := e.refreshRepositories()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, repo := range ordered {
+				names = append(names, repo.Name)
+			}
+			if !slices.Equal(names, want) {
+				t.Fatal("cursor leaked across selection or installation boundaries", names, want)
+			}
+		})
+	}
+}
 
 type fakeProvider struct {
 	block, started chan struct{}

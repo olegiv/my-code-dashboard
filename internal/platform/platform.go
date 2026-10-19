@@ -3,6 +3,7 @@ package platform
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/hex"
@@ -162,8 +163,7 @@ func Restore(dir, archive string) error {
 			if e != nil {
 				return e
 			}
-			_, e = io.Copy(out, tr)
-			out.Close()
+			e = copyAndClose(out, tr)
 			if e != nil {
 				return e
 			}
@@ -182,6 +182,14 @@ func Restore(dir, archive string) error {
 		return err
 	}
 	return restoreDatabase(filepath.Join(tmp, "dashboard.sqlite"), filepath.Join(dir, "dashboard.sqlite"))
+}
+
+func copyAndClose(dst io.WriteCloser, src io.Reader) error {
+	_, err := io.Copy(dst, src)
+	if closeErr := dst.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func restoreDatabase(candidatePath, target string) (err error) {
@@ -346,7 +354,7 @@ func InstallService(ctx context.Context, dir, addr, installation string) error {
 	if err = renderPlist(&xml, dir, addr, installation); err != nil {
 		return err
 	}
-	if err = os.WriteFile(path, []byte(xml.String()), 0600); err != nil {
+	if err = writePlist(path, []byte(xml.String())); err != nil {
 		return err
 	}
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
@@ -360,6 +368,18 @@ func InstallService(ctx context.Context, dir, addr, installation string) error {
 	}
 	return nil
 }
+func writePlist(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".plist-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err = copyAndClose(tmp, bytes.NewReader(data)); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func renderPlist(w io.Writer, dir, addr, installation string) error {
 	t := template.Must(template.New("plist").Parse(plist))
 	return t.Execute(w, map[string]string{"Label": ServiceLabel(installation), "Binary": filepath.Join(dir, "bin", "my-code-dashboard"), "Dir": dir, "Addr": addr})

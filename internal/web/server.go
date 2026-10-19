@@ -297,9 +297,9 @@ func (s *Server) view(r *http.Request, page, title string) (View, error) {
 	v.Namespace = q.Get("namespace")
 	for _, repo := range repos {
 		row := RepoRow{Repository: repo}
-		if len(byRepoCoverage[repo.ID]) == 0 {
-			for _, category := range model.Categories {
-				byRepoCoverage[repo.ID] = append(byRepoCoverage[repo.ID], model.Coverage{Category: category, Collection: "unknown", ScannerState: "unknown", Note: "No report has been collected. Select this repository and refresh to establish access and coverage."})
+		for _, category := range model.Categories {
+			if !slices.ContainsFunc(byRepoCoverage[repo.ID], func(c model.Coverage) bool { return c.Category == category }) {
+				byRepoCoverage[repo.ID] = append(byRepoCoverage[repo.ID], model.Coverage{Category: category, Collection: "unknown", ScannerState: "unknown", Note: "No report has been collected for this category. Select this repository and refresh to establish access and coverage."})
 			}
 		}
 		v.TotalRepos++

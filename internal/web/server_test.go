@@ -107,6 +107,13 @@ func TestEnabledScannerWithoutPipelineEvidenceNeedsAttention(t *testing.T) {
 			if err := app.Engine.Store.Apply(repo, snapshot, app.Engine.Now()); err != nil {
 				t.Fatal(err)
 			}
+			for _, category := range model.Categories {
+				if category != "code" {
+					if err := app.Engine.Store.Apply(repo, model.Snapshot{Coverage: model.Coverage{Category: category, Collection: "unsupported", ScannerState: "unavailable"}}, app.Engine.Now()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			run := model.Run{ID: "fixture", StartedAt: app.Engine.Now(), FinishedAt: app.Engine.Now(), DetailsRecorded: true, Outcomes: []model.CollectionOutcome{{RepositoryID: repo.ID, RepositoryName: repo.Name, Provider: "gitlab", Category: "code", Collection: "success", ScannerState: state, Reason: snapshot.Coverage.Note}}}
 			want := 0
 			if state == "enabled" {
@@ -633,6 +640,115 @@ func TestReconnectRejectsRecipientDifferentFromDisplayedForm(t *testing.T) {
 				}
 			} else if calls != 0 || !stored.ReconnectRequired || !strings.Contains(response.Header().Get("Location"), "error=") {
 				t.Fatal("reconnection sent a token to a recipient different from the submitted form")
+			}
+		})
+	}
+}
+
+func TestPartialFirstImportShowsUnknownCategories(t *testing.T) {
+	for _, mode := range []string{"none", "partial", "complete", "unsupported", "failed category", "paused"} {
+		t.Run(mode, func(t *testing.T) {
+			app := appFixture(t, false)
+			c := model.Connection{ID: "synthetic", Provider: "github", BaseURL: "https://github.com"}
+			if err := app.Engine.Store.SaveConnection(c); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Engine.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "1", Name: "example/project"}}); err != nil {
+				t.Fatal(err)
+			}
+			repos, err := app.Engine.Store.Repositories()
+			if err != nil || len(repos) != 1 {
+				t.Fatal(err)
+			}
+			repo := repos[0]
+			selected := mode != "paused"
+			if err = app.Engine.Store.SelectRepositories(map[string]bool{repo.ID: selected}); err != nil {
+				t.Fatal(err)
+			}
+			collected := 0
+			if mode != "none" {
+				for _, category := range model.Categories {
+					snap := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: category, ScannerState: "observed", Note: "Retained scanner evidence"}}
+					if collected == 0 {
+						snap.Findings = []model.Finding{{ID: "active", Source: "fixture", Title: "Synthetic retained finding", State: "open", NativeState: "DETECTED"}}
+					}
+					switch mode {
+					case "unsupported":
+						snap = model.Snapshot{Coverage: model.Coverage{Category: category, Collection: "unsupported", ScannerState: "unavailable", Note: "No standalone source"}}
+					case "failed category":
+						snap = model.Snapshot{Coverage: model.Coverage{Category: category, Collection: "denied", ScannerState: "unknown", Note: "Read access denied"}}
+					}
+					if err = app.Engine.Store.Apply(repo, snap, app.Engine.Now()); err != nil {
+						t.Fatal(err)
+					}
+					collected++
+					if mode != "complete" {
+						break
+					}
+				}
+			}
+			stored, err := app.Engine.Store.Coverage()
+			if err != nil || len(stored) != collected {
+				t.Fatal("unexpected persisted coverage", err)
+			}
+			want := len(model.Categories) - collected
+			if mode == "failed category" {
+				want++
+			}
+			for _, page := range []string{"overview", "repository", "repositories"} {
+				req := httptest.NewRequest("GET", "http://127.0.0.1:7364/?id="+url.QueryEscape(repo.ID), nil)
+				v, e := app.view(req, page, "Synthetic")
+				if e != nil || len(v.Repositories) != 1 {
+					t.Fatal(e)
+				}
+				row := v.Repositories[0]
+				portfolioIssues := want
+				if !selected {
+					portfolioIssues = 0
+				}
+				if len(row.Coverage) != len(model.Categories) || row.Issues != want || v.Issues != portfolioIssues {
+					t.Fatalf("%s: displayed categories=%d issues=%d/%d; want %d categories and %d unknown", page, len(row.Coverage), row.Issues, v.Issues, len(model.Categories), want)
+				}
+				seen := map[string]bool{}
+				for _, c := range row.Coverage {
+					if seen[c.Category] {
+						t.Fatal("duplicate category placeholder", c.Category)
+					}
+					seen[c.Category] = true
+					if c.Collection == "unknown" && (!c.LastSuccess.IsZero() || !c.LastAttempt.IsZero() || !c.AnalysisAt.IsZero() || c.ScannerState != "unknown") {
+						t.Fatal("placeholder fabricated collection or analysis evidence")
+					}
+					for _, original := range stored {
+						if c.Category == original.Category && c != original {
+							t.Fatal("placeholder replaced existing category evidence")
+						}
+					}
+				}
+				if page == "repository" && (v.SelectedRepo == nil || v.SelectedRepo.Issues != want) {
+					t.Fatal("details lost missing categories")
+				}
+			}
+			for _, path := range []string{"/", "/repositories", "/repositories/view?id=" + url.QueryEscape(repo.ID), "/findings?repo=" + url.QueryEscape(repo.ID)} {
+				response := request(app, "GET", path, nil, nil)
+				if response.Code != 200 {
+					t.Fatal("coverage consumer page failed", path, response.Code)
+				}
+				if path == "/" && want > 0 && strings.Contains(response.Body.String(), "Reports collected") {
+					t.Fatal("partial import falsely claimed reports collected")
+				}
+				if path == "/" && mode == "complete" && !strings.Contains(response.Body.String(), "Reports collected") {
+					t.Fatal("complete import lost its collected status")
+				}
+				if strings.HasPrefix(path, "/repositories/view") && want > 0 && !strings.Contains(response.Body.String(), fmt.Sprintf("%d need attention", want)) {
+					t.Fatal("rendered details omitted missing-category count")
+				}
+				if (mode == "partial" || mode == "complete" || mode == "paused") && (strings.HasPrefix(path, "/repositories/view") || strings.HasPrefix(path, "/findings")) && !strings.Contains(response.Body.String(), "Synthetic retained finding") {
+					t.Fatal("unknown coverage hid retained active findings")
+				}
+			}
+			after, err := app.Engine.Store.Coverage()
+			if err != nil || len(after) != collected {
+				t.Fatal("display placeholders were persisted", err)
 			}
 		})
 	}

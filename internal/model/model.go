@@ -130,16 +130,17 @@ type Change struct {
 }
 
 type Settings struct {
-	Hour           int       `json:"hour"`
-	Minute         int       `json:"minute"`
-	Timezone       string    `json:"timezone"`
-	Enabled        bool      `json:"enabled"`
-	LastSlot       time.Time `json:"last_slot"`
-	Attempts       int       `json:"attempts"`
-	RetryAt        time.Time `json:"retry_at"`
-	ChangesDays    int       `json:"changes_days"`
-	LogsDays       int       `json:"logs_days"`
-	InstallationID string    `json:"installation_id"`
+	Hour                    int       `json:"hour"`
+	Minute                  int       `json:"minute"`
+	Timezone                string    `json:"timezone"`
+	Enabled                 bool      `json:"enabled"`
+	LastSlot                time.Time `json:"last_slot"`
+	Attempts                int       `json:"attempts"`
+	RetryAt                 time.Time `json:"retry_at"`
+	ResumeAfterRepositoryID string    `json:"resume_after_repository_id,omitempty"`
+	ChangesDays             int       `json:"changes_days"`
+	LogsDays                int       `json:"logs_days"`
+	InstallationID          string    `json:"installation_id"`
 }
 
 func DefaultSettings() Settings {

@@ -780,6 +780,71 @@ func TestGitLabSASTScannerTypesPreserveCoverageAndFindings(t *testing.T) {
 	}
 }
 
+func TestGitLabMissingRunsSurviveCategoryAggregation(t *testing.T) {
+	for _, pair := range []struct {
+		category string
+		types    []string
+	}{
+		{"dast", []string{"DAST", "API_FUZZING"}},
+		{"code", []string{"SAST", "SAST_ADVANCED"}},
+		{"containers", []string{"CONTAINER_SCANNING", "CLUSTER_IMAGE_SCANNING"}},
+		{"iac", []string{"IAC_SCANNING", "SAST_IAC"}},
+	} {
+		for _, tc := range []struct {
+			name         string
+			enabled, ran []string
+			want         string
+		}{
+			{"some ran", pair.types, pair.types[:1], "enabled"},
+			{"all ran", pair.types, pair.types, "observed"},
+			{"none ran", pair.types, []string{}, "enabled"},
+			{"single scanner", pair.types[:1], pair.types[:1], "observed"},
+			{"unrelated run", pair.types, []string{"SECRET_DETECTION"}, "enabled"},
+			{"case normalization", pair.types, []string{strings.ToLower(pair.types[0]), pair.types[1]}, "observed"},
+		} {
+			t.Run(pair.category+"/"+tc.name, func(t *testing.T) {
+				a := mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+					var body struct{ Query string }
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					switch {
+					case strings.Contains(body.Query, "DashboardCapabilities"):
+						fmt.Fprint(w, syntheticSchema)
+					case strings.Contains(body.Query, "DashboardScanners"):
+						jsonReply(w, map[string]any{"data": map[string]any{"project": map[string]any{"securityScanners": map[string]any{"available": pair.types, "enabled": tc.enabled, "pipelineRun": tc.ran}}}})
+					default:
+						jsonReply(w, map[string]any{"data": map[string]any{"project": map[string]any{"vulnerabilities": map[string]any{"nodes": []map[string]string{{"id": "gid://gitlab/Vulnerability/1", "title": "Synthetic active advisory", "state": "DETECTED", "severity": "HIGH", "reportType": pair.types[0]}}, "pageInfo": map[string]any{"hasNextPage": false}}}}})
+					}
+				})
+				g := gitlab{api: a, base: a.base}
+				snapshots := g.Collect(t.Context(), model.Repository{Name: "example/project"})
+				found := false
+				for _, snap := range snapshots {
+					if snap.Coverage.Category != pair.category {
+						continue
+					}
+					found = true
+					if !snap.Complete || snap.Coverage.ScannerState != tc.want || len(snap.Findings) != 1 || !snap.Coverage.AnalysisAt.IsZero() {
+						t.Fatalf("missing scanner run hidden or report lost: %+v", snap)
+					}
+					if snap.Findings[0].State != "open" || snap.Findings[0].NativeState != "DETECTED" {
+						t.Fatal("active native lifecycle was lost")
+					}
+					if tc.want == "enabled" && !strings.Contains(snap.Coverage.Note, pair.types[1]) {
+						t.Fatal("coverage omitted the specific missing scanner", snap.Coverage.Note)
+					}
+					run := model.Run{Outcomes: []model.CollectionOutcome{{Collection: "success", ScannerState: snap.Coverage.ScannerState, Reason: snap.Coverage.Note}}}
+					if (len(run.Attention()) > 0) != (tc.want == "enabled") {
+						t.Fatal("missing-run evidence disappeared from activity")
+					}
+				}
+				if !found {
+					t.Fatal("expected category was omitted")
+				}
+			})
+		}
+	}
+}
+
 func TestGitLabZeroInaccessibleErrorsAndSchemaGaps(t *testing.T) {
 	for _, tc := range []struct {
 		name, response string
@@ -966,6 +1031,70 @@ func TestGitLabOptionalScannerRateLimitPreservesReportAndDeadline(t *testing.T) 
 			}
 			if findings != 1 {
 				t.Fatal("successful vulnerability import was lost")
+			}
+		})
+	}
+}
+
+func TestGitHubAnalysisEndpointCoverageClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, want string
+		status              int
+		complete, limited   bool
+	}{
+		{"disabled", "Code scanning is not enabled for this repository.", "disabled", 403, false, false},
+		{"missing analysis", "no analysis found", "no_analysis", 404, false, false},
+		{"denied", "Resource not accessible by personal access token", "denied", 403, false, false},
+		{"expired", "Code scanning is not enabled for this repository.", "denied", 401, false, false},
+		{"ambiguous missing", "Not Found", "unavailable", 404, false, false},
+		{"untrusted message", "no analysis found SYNTHETIC_PRIVATE_DETAIL", "unavailable", 404, false, false},
+		{"rate limit wins", "Code scanning is not enabled for this repository.", "rate_limited", 403, false, true},
+		{"normal", "", "", 200, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := github{api: mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Error("collection used a write method")
+				}
+				switch {
+				case strings.Contains(r.URL.Path, "code-scanning/alerts"):
+					jsonReply(w, []map[string]any{{"number": 1, "state": "open", "rule": map[string]string{"description": "Synthetic new active alert"}}})
+				case strings.Contains(r.URL.Path, "code-scanning/analyses"):
+					if r.URL.Query().Get("ref") != "refs/heads/main" {
+						t.Error("analysis request lost default-branch scope")
+					}
+					if tc.limited {
+						w.Header().Set("Retry-After", "3600")
+					}
+					w.WriteHeader(tc.status)
+					if tc.complete {
+						fmt.Fprint(w, "[]")
+					} else {
+						jsonReply(w, map[string]string{"message": tc.message})
+					}
+				default:
+					fmt.Fprint(w, "{}")
+				}
+			}), browser: "https://github.com"}
+			snap := g.code(t.Context(), "repos/example/project/", "main")
+			if snap.Complete != tc.complete || snap.Coverage.Collection != tc.want {
+				t.Fatalf("analysis error classification: got complete=%v collection=%s; want %v %s", snap.Complete, snap.Coverage.Collection, tc.complete, tc.want)
+			}
+			if !snap.Coverage.AnalysisAt.IsZero() || (!tc.complete && (len(snap.Findings) != 0 || snap.Coverage.Ref != "refs/heads/main")) {
+				t.Fatal("analysis error imported partial alerts, lost scope or invented analysis time")
+			}
+			if tc.complete && (len(snap.Findings) != 1 || snap.Findings[0].State != "open" || snap.Findings[0].NativeState != "open") {
+				t.Fatal("normal import lost active native findings")
+			}
+			if tc.want == "disabled" && snap.Coverage.ScannerState != "disabled" || tc.want == "no_analysis" && snap.Coverage.ScannerState != "not_observed" {
+				t.Fatal("analysis error lost scanner evidence")
+			}
+			if tc.limited != !snap.Coverage.RetryAt.IsZero() {
+				t.Fatal("analysis error lost or fabricated rate-limit backoff")
+			}
+			raw, err := json.Marshal(snap)
+			if err != nil || strings.Contains(string(raw), "SYNTHETIC_PRIVATE_DETAIL") {
+				t.Fatal("untrusted error message leaked into the snapshot", err)
 			}
 		})
 	}

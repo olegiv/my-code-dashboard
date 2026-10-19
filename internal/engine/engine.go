@@ -208,24 +208,58 @@ func (e *Engine) startLocked(trigger string) (string, bool, error) {
 	return run.ID, true, nil
 }
 
+func (e *Engine) refreshRepositories() ([]model.Repository, error) {
+	repos, err := e.Store.Repositories()
+	if err != nil {
+		return nil, err
+	}
+	e.settingsMu.Lock()
+	settings, err := e.Store.Settings()
+	e.settingsMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	var selected []model.Repository
+	for _, repo := range repos {
+		if repo.Selected {
+			selected = append(selected, repo)
+		}
+	}
+	for i, repo := range selected {
+		if repo.ID == settings.ResumeAfterRepositoryID {
+			selected = append(selected[i+1:], selected[:i+1]...)
+			break
+		}
+	}
+	return selected, nil
+}
+
+func (e *Engine) saveRefreshResume(id string) error {
+	e.settingsMu.Lock()
+	defer e.settingsMu.Unlock()
+	settings, err := e.Store.Settings()
+	if err != nil {
+		return err
+	}
+	settings.ResumeAfterRepositoryID = id
+	return e.Store.SaveSettings(settings)
+}
+
 func (e *Engine) run(run model.Run) {
 	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Minute)
 	defer cancel()
 	run.Message = ""
-	repos, err := e.Store.Repositories()
+	repos, err := e.refreshRepositories()
 	if err != nil {
 		run.Failed++
-		run.Message = "Could not read repository selection."
+		run.Message = "Could not read repository selection or refresh progress."
 	}
 	adapters := map[string]provider.Provider{}
 	adapterErrors := map[string]error{}
 	epochs := map[string]uint64{}
 	connectionChanged := &provider.Error{Kind: "error", Message: "Connection changed during refresh; results were discarded and previous complete data was retained. Refresh again to use the current connection."}
 	var retryAt time.Time
-	for _, repo := range repos {
-		if !repo.Selected {
-			continue
-		}
+	for i, repo := range repos {
 		if ctx.Err() != nil {
 			break
 		}
@@ -327,6 +361,15 @@ func (e *Engine) run(run model.Run) {
 		e.connectionsMu.Unlock()
 		// Preserve completed repository outcomes if the application later stops.
 		_ = e.Store.SaveRun(run)
+		resumeAfter := repo.ID
+		if i == len(repos)-1 {
+			resumeAfter = ""
+		}
+		if err = e.saveRefreshResume(resumeAfter); err != nil {
+			run.Failed++
+			run.Message = "Could not save refresh progress. Completed imports were retained."
+			break
+		}
 	}
 	run.FinishedAt = e.Now().UTC()
 	run.Status = "success"

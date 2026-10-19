@@ -194,7 +194,9 @@ func (g *github) code(ctx context.Context, path, branch string) model.Snapshot {
 	}
 	analyses, err := pages[ghAnalysis](ctx, g.api, path+"code-scanning/analyses?"+query.Encode())
 	if err != nil {
-		return failed("code", err)
+		s := githubFailed("code", err)
+		s.Coverage.Ref = query.Get("ref")
+		return s
 	}
 	if len(analyses) > 0 {
 		type stream struct{ tool, category, ref string }

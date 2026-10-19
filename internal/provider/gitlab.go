@@ -396,14 +396,21 @@ func (g *gitlab) scannerCoverage(ctx context.Context, r model.Repository, schema
 		return
 	}
 	available, enabled, ran := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	ranTypes := map[string]bool{}
+	missing := map[string][]string{}
 	for _, x := range v.Available {
 		available[glCategory(x)] = true
 	}
-	for _, x := range v.Enabled {
-		enabled[glCategory(x)] = true
-	}
 	for _, x := range v.PipelineRun {
 		ran[glCategory(x)] = true
+		ranTypes[strings.ToUpper(x)] = true
+	}
+	for _, x := range v.Enabled {
+		category := glCategory(x)
+		enabled[category] = true
+		if !ranTypes[strings.ToUpper(x)] {
+			missing[category] = append(missing[category], strings.ToUpper(x))
+		}
 	}
 	for category, s := range result {
 		if category == "other" {
@@ -419,12 +426,12 @@ func (g *gitlab) scannerCoverage(ctx context.Context, r model.Repository, schema
 		if enabled[category] {
 			s.Coverage.ScannerState = "enabled"
 		}
-		if ran[category] {
+		if ran[category] && len(missing[category]) == 0 {
 			s.Coverage.ScannerState = "observed"
 		}
 		s.Coverage.Note = "Scanner state comes from project securityScanners (available/enabled/latest pipeline success). The report does not expose a per-scanner analysis timestamp. IaC may be included in SAST; category parity is not implied."
 		if s.Coverage.ScannerState == "enabled" {
-			s.Coverage.Note += " The scanner is enabled, but no successful run is reported for the latest pipeline."
+			s.Coverage.Note += " Enabled scanners without a successful run in the latest pipeline: " + strings.Join(missing[category], ", ") + "."
 		}
 	}
 }
