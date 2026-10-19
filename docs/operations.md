@@ -32,6 +32,8 @@ The label is `org.olegiv.my-code-dashboard.` plus the first eight characters of 
 
 ## Provider connection troubleshooting
 
+Category collections with a last success more than 48 hours ago need attention even when their collection and scanner states remain successful. Overview, the repository list and repository details count each affected category once, including when it also has a collection or scanner issue. A fresh category cannot hide another category's staleness behind the repository's latest-success timestamp. Exactly 48 hours is not yet stale; a category with no successful collection keeps its existing coverage status. Portfolio issue and stale totals cover monitored repositories only; paused repositories retain warnings in their own list/detail views. Collection freshness is separate from provider analysis time, and these warnings do not change retained findings or historical activity.
+
 Use the project build commands so the binary uses Go 1.26.9, also the module's minimum compiler version. A reproduced TLS handshake timeout with Go 1.27 disappeared with 1.26.9 while retaining TLS 1.3 and system certificate verification. The compiler pin applies to Make targets, CI, and release archives. Direct commands and IDE builds must also select Go 1.26.9; the module minimum does not downgrade a newer compiler.
 
 [Toolchain decision](go-toolchain.md) documents the support/security rationale, concrete incompatibility with Go 1.17, observed Go 1.27 behavior and its limits, exact pin enforcement, and the verification needed before an upgrade.

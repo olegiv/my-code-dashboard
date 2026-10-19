@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,115 @@ func TestEnabledScannerWithoutPipelineEvidenceNeedsAttention(t *testing.T) {
 		})
 	}
 }
+func TestStaleCategoryAttention(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		age        time.Duration
+		state      string
+		failed     bool
+		missing    bool
+		paused     bool
+		twoStale   bool
+		wantIssues int
+		wantStale  int
+	}{
+		{name: "fresh", age: time.Hour},
+		{name: "exact boundary", age: 48 * time.Hour},
+		{name: "past boundary", age: 48*time.Hour + time.Nanosecond, wantIssues: 1, wantStale: 1},
+		{name: "stale with fresh sibling", age: 72 * time.Hour, wantIssues: 1, wantStale: 1},
+		{name: "two stale categories", age: 72 * time.Hour, twoStale: true, wantIssues: 2, wantStale: 2},
+		{name: "failed and stale counted once", age: 72 * time.Hour, failed: true, wantIssues: 1, wantStale: 1},
+		{name: "disabled and stale counted once", age: 72 * time.Hour, state: "disabled", wantIssues: 1, wantStale: 1},
+		{name: "enabled and stale counted once", age: 72 * time.Hour, state: "enabled", wantIssues: 1, wantStale: 1},
+		{name: "warning and stale counted once", age: 72 * time.Hour, state: "warning", wantIssues: 1, wantStale: 1},
+		{name: "missing success is not stale", missing: true, wantIssues: 1},
+		{name: "paused stale repository", age: 72 * time.Hour, paused: true, wantIssues: 1, wantStale: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			app := appFixture(t, false)
+			now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+			app.Engine.Now = func() time.Time { return now }
+			connection := model.Connection{ID: "fixture", Provider: "gitlab", BaseURL: "https://gitlab.example"}
+			if err := app.Engine.Store.SaveConnection(connection); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Engine.Store.SaveDiscovered(connection, []model.Repository{{ExternalID: "42", Name: "example/project"}}); err != nil {
+				t.Fatal(err)
+			}
+			repos, err := app.Engine.Store.Repositories()
+			if err != nil || len(repos) != 1 {
+				t.Fatal("fixture repository", err)
+			}
+			repo := repos[0]
+			if err = app.Engine.Store.SelectRepositories(map[string]bool{repo.ID: !tt.paused}); err != nil {
+				t.Fatal(err)
+			}
+			for _, category := range model.Categories {
+				at := now
+				snap := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: category, ScannerState: "observed"}}
+				if category == "code" {
+					at = now.Add(-tt.age)
+					snap.Findings = []model.Finding{{ID: "active", Source: "fixture", Title: "Synthetic retained finding", State: "open", Severity: "high"}}
+					if tt.state != "" {
+						snap.Coverage.ScannerState = tt.state
+					}
+					if tt.missing {
+						snap = model.Snapshot{Coverage: model.Coverage{Category: category, Collection: "no_analysis", ScannerState: "unknown"}}
+					}
+				} else if category == "secrets" && tt.twoStale {
+					at = now.Add(-tt.age)
+				}
+				if err = app.Engine.Store.Apply(repo, snap, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.failed {
+				if err = app.Engine.Store.Apply(repo, model.Snapshot{Coverage: model.Coverage{Category: "code", Collection: "error", ScannerState: "observed"}}, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stored, err := app.Engine.Store.Coverage()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, page := range []string{"overview", "repositories", "repository"} {
+				v, e := app.view(httptest.NewRequest("GET", "http://127.0.0.1:7364/?id="+url.QueryEscape(repo.ID), nil), page, "Synthetic")
+				if e != nil || len(v.Repositories) != 1 {
+					t.Fatal("view failed", page, e)
+				}
+				issues, stale := tt.wantIssues, tt.wantStale
+				if tt.paused {
+					issues, stale = 0, 0
+				}
+				row := v.Repositories[0]
+				if row.Issues != tt.wantIssues || v.Issues != issues || v.Stale != stale || !row.LastSuccess.Equal(now) {
+					t.Errorf("%s: row/portfolio/stale=%d/%d/%d, want %d/%d/%d; latest success=%v", page, row.Issues, v.Issues, v.Stale, tt.wantIssues, issues, stale, row.LastSuccess)
+				}
+				if page == "repository" && (v.SelectedRepo == nil || v.SelectedRepo.Issues != tt.wantIssues) {
+					t.Error("detail summary lost category attention")
+				}
+			}
+			for _, path := range []string{"/", "/repositories", "/repositories/view?id=" + url.QueryEscape(repo.ID)} {
+				response := request(app, "GET", path, nil, nil)
+				wantWarning := tt.wantIssues > 0 && (!tt.paused || path != "/")
+				if response.Code != 200 || strings.Contains(response.Body.String(), fmt.Sprintf("%d need attention", tt.wantIssues)) != wantWarning {
+					t.Errorf("%s: rendered attention mismatch; status=%d", path, response.Code)
+				}
+				if path == "/" && !tt.paused && strings.Contains(response.Body.String(), "Reports collected") != (tt.wantIssues == 0) {
+					t.Error("overview successful summary hides stale category")
+				}
+				if strings.HasPrefix(path, "/repositories/view") && !tt.missing && !strings.Contains(response.Body.String(), "Synthetic retained finding") {
+					t.Error("attention calculation hid retained active finding")
+				}
+			}
+			after, err := app.Engine.Store.Coverage()
+			if err != nil || !slices.Equal(after, stored) {
+				t.Fatal("view mutated stored coverage", err)
+			}
+		})
+	}
+}
+
 func TestFindingsHistoryRestorationReturnsShell(t *testing.T) {
 	app := appFixture(t, true)
 	path := "/findings?severity=critical&provider=github"
