@@ -314,7 +314,7 @@ func (s *Server) view(r *http.Request, page, title string) (View, error) {
 			if c.LastSuccess.After(row.LastSuccess) {
 				row.LastSuccess = c.LastSuccess
 			}
-			if (c.Collection != "success" && c.Collection != "unsupported") || slices.Contains([]string{"warning", "disabled", "enabled"}, c.ScannerState) || (!c.LastSuccess.IsZero() && v.Now.Sub(c.LastSuccess) > 48*time.Hour) {
+			if (c.Collection != "success" && c.Collection != "unsupported") || slices.Contains([]string{"warning", "disabled", "enabled"}, c.ScannerState) || slices.ContainsFunc([]time.Time{c.LastSuccess, c.AnalysisAt}, func(at time.Time) bool { return !at.IsZero() && v.Now.Sub(at) > 48*time.Hour }) {
 				row.Issues++
 				if repo.Selected {
 					v.Issues++

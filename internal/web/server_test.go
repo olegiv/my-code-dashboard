@@ -150,15 +150,16 @@ func TestEnabledScannerWithoutPipelineEvidenceNeedsAttention(t *testing.T) {
 }
 func TestStaleCategoryAttention(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		age        time.Duration
-		state      string
-		failed     bool
-		missing    bool
-		paused     bool
-		twoStale   bool
-		wantIssues int
-		wantStale  int
+		name        string
+		age         time.Duration
+		analysisAge time.Duration
+		state       string
+		failed      bool
+		missing     bool
+		paused      bool
+		twoStale    bool
+		wantIssues  int
+		wantStale   int
 	}{
 		{name: "fresh", age: time.Hour},
 		{name: "exact boundary", age: 48 * time.Hour},
@@ -171,6 +172,19 @@ func TestStaleCategoryAttention(t *testing.T) {
 		{name: "warning and stale counted once", age: 72 * time.Hour, state: "warning", wantIssues: 1, wantStale: 1},
 		{name: "missing success is not stale", missing: true, wantIssues: 1},
 		{name: "paused stale repository", age: 72 * time.Hour, paused: true, wantIssues: 1, wantStale: 1},
+		{name: "fresh analysis", analysisAge: time.Hour},
+		{name: "analysis exact boundary", analysisAge: 48 * time.Hour},
+		{name: "analysis past boundary", analysisAge: 48*time.Hour + time.Nanosecond, wantIssues: 1},
+		{name: "stale analysis with fresh collection", analysisAge: 72 * time.Hour, wantIssues: 1},
+		{name: "future analysis", analysisAge: -time.Hour},
+		{name: "both timestamps stale counted once", age: 72 * time.Hour, analysisAge: 72 * time.Hour, wantIssues: 1, wantStale: 1},
+		{name: "stale collection with fresh analysis", age: 72 * time.Hour, analysisAge: time.Hour, wantIssues: 1, wantStale: 1},
+		{name: "two stale analyses", analysisAge: 72 * time.Hour, twoStale: true, wantIssues: 2},
+		{name: "failed and stale analysis counted once", analysisAge: 72 * time.Hour, failed: true, wantIssues: 1},
+		{name: "disabled and stale analysis counted once", analysisAge: 72 * time.Hour, state: "disabled", wantIssues: 1},
+		{name: "enabled and stale analysis counted once", analysisAge: 72 * time.Hour, state: "enabled", wantIssues: 1},
+		{name: "warning and stale analysis counted once", analysisAge: 72 * time.Hour, state: "warning", wantIssues: 1},
+		{name: "paused stale analysis", analysisAge: 72 * time.Hour, paused: true, wantIssues: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			app := appFixture(t, false)
@@ -196,6 +210,9 @@ func TestStaleCategoryAttention(t *testing.T) {
 				snap := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: category, ScannerState: "observed"}}
 				if category == "code" {
 					at = now.Add(-tt.age)
+					if tt.analysisAge != 0 {
+						snap.Coverage.AnalysisAt = now.Add(-tt.analysisAge)
+					}
 					snap.Findings = []model.Finding{{ID: "active", Source: "fixture", Title: "Synthetic retained finding", State: "open", Severity: "high"}}
 					if tt.state != "" {
 						snap.Coverage.ScannerState = tt.state
@@ -205,6 +222,9 @@ func TestStaleCategoryAttention(t *testing.T) {
 					}
 				} else if category == "secrets" && tt.twoStale {
 					at = now.Add(-tt.age)
+					if tt.analysisAge != 0 {
+						snap.Coverage.AnalysisAt = now.Add(-tt.analysisAge)
+					}
 				}
 				if err = app.Engine.Store.Apply(repo, snap, at); err != nil {
 					t.Fatal(err)
