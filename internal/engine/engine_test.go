@@ -840,6 +840,83 @@ func TestManualRefreshPersistsProviderDeadline(t *testing.T) {
 	}
 }
 
+func TestHistoryRetentionWithoutRefresh(t *testing.T) {
+	for _, mode := range []string{"preferences", "disabled schedule", "active refresh", "maintenance startup"} {
+		t.Run(mode, func(t *testing.T) {
+			e, _ := engineFixture(t, t.Context(), &fakeProvider{})
+			e.Factory = func(model.Connection, string) (provider.Provider, error) {
+				t.Error("retention maintenance attempted provider access")
+				return nil, errors.New("unexpected provider access")
+			}
+			now := e.Now()
+			repos, _ := e.Store.Repositories()
+			snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}}
+			if err := e.Store.Apply(repos[0], snapshot, now.AddDate(0, 0, -11)); err != nil {
+				t.Fatal(err)
+			}
+			for i, at := range []time.Time{now.AddDate(0, 0, -10), now.AddDate(0, 0, -2), now} {
+				snapshot.Findings = []model.Finding{{ID: fmt.Sprint(i), Source: "fixture", State: "open", NativeState: "open"}}
+				if err := e.Store.Apply(repos[0], snapshot, at); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Store.SaveRun(model.Run{ID: fmt.Sprint(i), StartedAt: at, Status: "success"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			settings, _ := e.Store.Settings()
+			settings.Enabled, settings.ChangesDays, settings.LogsDays = false, 2, 2
+			if mode == "active refresh" {
+				settings.Enabled = true
+			}
+			if mode == "preferences" {
+				if err := e.SavePreferences(settings.Hour, settings.Minute, settings.Timezone, false, 2, 2); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := e.Store.SaveSettings(settings); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "active refresh" {
+					e.active = "synthetic-running-refresh"
+				}
+				if mode == "maintenance startup" {
+					ctx, cancel := context.WithCancel(t.Context())
+					cancel()
+					// Schedule performs maintenance once before its select loop,
+					// including when the caller is already shutting down.
+					e.Schedule(ctx)
+				} else {
+					if err := e.Tick(now); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			runs, runErr := e.Store.Runs()
+			changes, changeErr := e.Store.Changes()
+			if runErr != nil || changeErr != nil || len(runs) != 2 || len(changes) != 2 || runs[1].ID != "1" || changes[1].FindingID != "1" {
+				t.Fatalf("expired history retained or cutoff history lost: runs=%v changes=%v errors=%v/%v", runs, changes, runErr, changeErr)
+			}
+			backup := filepath.Join(t.TempDir(), "after-maintenance.sqlite")
+			if err := e.Store.Backup(t.Context(), backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ValidateBackup(backup); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := store.Open(backup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			runs, runErr = restored.Runs()
+			changes, changeErr = restored.Changes()
+			if runErr != nil || changeErr != nil || len(runs) != 2 || len(changes) != 2 {
+				t.Fatal("backup retained expired history or lost retained history")
+			}
+		})
+	}
+}
+
 func TestSchedulePreferencesPreserveOutstandingBackoff(t *testing.T) {
 	for _, limited := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary change", true: "provider deadline"}[limited], func(t *testing.T) {

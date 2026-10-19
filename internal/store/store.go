@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -397,7 +398,7 @@ func (s *Store) Runs() ([]model.Run, error) {
 	return queryList[model.Run](s.db, "SELECT data FROM runs ORDER BY "+seconds+" DESC,"+nanos+" DESC LIMIT 100")
 }
 func (s *Store) Changes() ([]model.Change, error) {
-	return queryList[model.Change](s.db, "SELECT data FROM changes ORDER BY id DESC LIMIT 200")
+	return queryList[model.Change](s.db, "SELECT changes.data FROM changes JOIN repositories ON repositories.id=changes.repository_id WHERE repositories.selected=1 ORDER BY changes.id DESC LIMIT 200")
 }
 func (s *Store) InterruptRuns(now time.Time) error {
 	runs, err := s.Runs()
@@ -506,10 +507,12 @@ func ValidateBackup(path string) error {
 	}
 	repositoryConnections := map[string]model.Connection{}
 	if err = validateBackupRecords(db, "SELECT data,id,connection_id,external_id,selected FROM repositories", func(r model.Repository) []any {
-		if !validBackupProviderURL(r.URL, connections[r.ConnectionID]) {
+		connection, exists := connections[r.ConnectionID]
+		id, parseErr := strconv.ParseInt(r.ExternalID, 10, 64)
+		if !exists || r.Provider != connection.Provider || parseErr != nil || id <= 0 || strconv.FormatInt(id, 10) != r.ExternalID || strings.TrimSpace(r.Name) == "" || !validBackupProviderURL(r.URL, connection) {
 			return nil
 		}
-		repositoryConnections[r.ID] = connections[r.ConnectionID]
+		repositoryConnections[r.ID] = connection
 		var selected int64
 		if r.Selected {
 			selected = 1

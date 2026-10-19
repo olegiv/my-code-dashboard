@@ -95,7 +95,7 @@ func TestRestoredFindingLinksStayWithinProvider(t *testing.T) {
 			{name: "GitHub forged base", link: "https://attacker.example/phishing", connection: `UPDATE connections SET data=json_set(data,'$.provider','github');`},
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
-				archive := restoreSecurityArchive(t, tc.connection+`UPDATE `+table+` SET data=json_set(data,'$.url','`+tc.link+`')`)
+				archive := restoreSecurityArchive(t, tc.connection+`UPDATE repositories SET data=json_set(data,'$.provider',(SELECT json_extract(data,'$.provider') FROM connections WHERE id=repositories.connection_id)); UPDATE `+table+` SET data=json_set(data,'$.url','`+tc.link+`')`)
 				dir, _ := restoreSecurityDestination(t)
 				path := filepath.Join(dir, "dashboard.sqlite")
 				before, err := os.ReadFile(path)
@@ -174,7 +174,7 @@ func TestRestoreValidatesConnectionsWithEmptyLinks(t *testing.T) {
 				if unreferenced {
 					mutation += fmt.Sprintf(`INSERT INTO connections VALUES('unreferenced',json_object('id','unreferenced','provider','%s','base_url','%s'));`, tc.provider, tc.base)
 				} else {
-					mutation += fmt.Sprintf(`UPDATE connections SET data=json_set(data,'$.provider','%s','$.base_url','%s');`, tc.provider, tc.base)
+					mutation += fmt.Sprintf(`UPDATE connections SET data=json_set(data,'$.provider','%s','$.base_url','%s'); UPDATE repositories SET data=json_set(data,'$.provider','%s');`, tc.provider, tc.base, tc.provider)
 				}
 				archive := restoreSecurityArchive(t, mutation)
 				dir, destinationID := restoreSecurityDestination(t)
@@ -488,6 +488,78 @@ func TestRestoreSelectionWithJSONAliases(t *testing.T) {
 			}
 			if err = store.ValidateBackup(backup); err != nil {
 				t.Fatalf("selection left a non-restorable database: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestoreValidatesRepositoryMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, nameValue, provider string
+		valid                         bool
+	}{
+		{"GitLab", "42", "example/synthetic", "gitlab", true},
+		{"maximum ID", "9223372036854775807", "example/synthetic", "gitlab", true},
+		{"empty ID", "", "example/synthetic", "gitlab", false},
+		{"nonnumeric ID", "invalid", "example/synthetic", "gitlab", false},
+		{"zero ID", "0", "example/synthetic", "gitlab", false},
+		{"negative ID", "-1", "example/synthetic", "gitlab", false},
+		{"overflow ID", "9223372036854775808", "example/synthetic", "gitlab", false},
+		{"signed ID", "+42", "example/synthetic", "gitlab", false},
+		{"zero-padded ID", "042", "example/synthetic", "gitlab", false},
+		{"whitespace ID", " 42", "example/synthetic", "gitlab", false},
+		{"empty name", "42", "", "gitlab", false},
+		{"blank name", "42", "  ", "gitlab", false},
+		{"provider mismatch", "42", "example/synthetic", "github", false},
+		{"missing provider", "42", "example/synthetic", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Keep indexed and JSON identities consistent: the invalid metadata
+			// must be rejected independently of the existing projection checks.
+			mutation := fmt.Sprintf(`UPDATE repositories SET external_id='%s',data=json_set(data,'$.external_id','%s','$.name','%s','$.provider','%s');`, tc.id, tc.id, tc.nameValue, tc.provider)
+			archive := restoreSecurityArchive(t, mutation)
+			dir, identity := restoreSecurityDestination(t)
+			path := filepath.Join(dir, "dashboard.sqlite")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = Restore(dir, archive)
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("invalid repository metadata was installed")
+				}
+				after, readErr := os.ReadFile(path)
+				settings, settingsErr := store.ReadSettings(path)
+				copies, globErr := filepath.Glob(filepath.Join(dir, "before-restore-*"))
+				if readErr != nil || settingsErr != nil || globErr != nil || !bytes.Equal(before, after) || settings.InstallationID != identity || len(copies) != 0 {
+					t.Fatal("invalid repository metadata reached destination replacement")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			repos, repoErr := s.Repositories()
+			findings, findingErr := s.Findings()
+			if repoErr != nil || findingErr != nil || len(repos) != 1 || repos[0].ExternalID != tc.id || !repos[0].Selected || len(findings) != 1 {
+				t.Fatal("valid restore lost repository identity, selection or findings")
+			}
+			c, err := s.Connection(repos[0].ConnectionID)
+			if err != nil || !c.ReconnectRequired {
+				t.Fatal("valid restore lost quarantine", err)
+			}
+			if err = s.SaveDiscovered(c, []model.Repository{{ExternalID: tc.id, Name: "example/renamed"}}); err != nil {
+				t.Fatal("valid restored repository blocked rediscovery", err)
+			}
+			credentials, calls := refreshRestoredSelection(t, s)
+			if credentials.reads != 0 || calls != 0 {
+				t.Fatal("restored repository bypassed credential quarantine")
 			}
 		})
 	}

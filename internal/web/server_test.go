@@ -259,6 +259,14 @@ func TestSettingsSelectionAndBackupWorkflow(t *testing.T) {
 	if selected != 1 {
 		t.Fatal("selection did not persist")
 	}
+	for _, run := range []model.Run{
+		{ID: "expired-history", StartedAt: app.Engine.Now().AddDate(0, 0, -21), Status: "success"},
+		{ID: "retained-history", StartedAt: app.Engine.Now(), Status: "success"},
+	} {
+		if err := app.Engine.Store.SaveRun(run); err != nil {
+			t.Fatal(err)
+		}
+	}
 	values = url.Values{"csrf": {app.csrf}, "time": {"09:00"}, "timezone": {"Europe/Zurich"}, "changes_days": {"60"}, "logs_days": {"20"}, "enabled": {"on"}}
 	if r := request(app, "POST", "/settings", values, nil); r.Code != 303 {
 		t.Fatal("settings failed")
@@ -266,6 +274,14 @@ func TestSettingsSelectionAndBackupWorkflow(t *testing.T) {
 	s, _ := app.Engine.Store.Settings()
 	if s.ChangesDays != 60 || !s.Enabled {
 		t.Fatal("settings did not persist")
+	}
+	runs, err := app.Engine.Store.Runs()
+	if err != nil || len(runs) != 1 || runs[0].ID != "retained-history" {
+		t.Fatal("settings POST did not immediately prune expired history", err)
+	}
+	activity := request(app, "GET", "/activity", nil, nil)
+	if activity.Code != 200 || strings.Contains(activity.Body.String(), "expired-history") {
+		t.Fatal("activity failed after settings cleanup")
 	}
 	values.Set("time", "26:00")
 	r := request(app, "POST", "/settings", values, nil)
@@ -287,6 +303,57 @@ func TestEmptyInstallationGuidesConnectionAndNoDataIsUnknown(t *testing.T) {
 	r = request(app, "POST", "/connections", url.Values{"csrf": {app.csrf}, "token": {"synthetic"}}, nil)
 	if r.Code != 303 || !strings.Contains(r.Header().Get("Location"), "Provision") {
 		t.Fatal("headless backend accepted browser token")
+	}
+}
+
+func TestChangeViewsKeepMonitoredHistoryAfterDeselection(t *testing.T) {
+	app := appFixture(t, false)
+	s := app.Engine.Store
+	c := model.Connection{ID: "fixture", Provider: "github", BaseURL: "https://github.com"}
+	if err := s.SaveConnection(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveDiscovered(c, []model.Repository{{ExternalID: "1", Name: "example/monitored"}, {ExternalID: "2", Name: "example/paused"}}); err != nil {
+		t.Fatal(err)
+	}
+	repos, err := s.Repositories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, repo := range repos {
+		snapshot := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}}
+		if err = s.Apply(repo, snapshot, app.Engine.Now()); err != nil {
+			t.Fatal(err)
+		}
+		count, title := 1, "Visible retained change"
+		if i == 1 {
+			count, title = 201, "Hidden paused change"
+		}
+		for n := range count {
+			snapshot.Findings = []model.Finding{{ID: fmt.Sprint(n), Source: "fixture", Title: title, State: "open", NativeState: "open"}}
+			if err = s.Apply(repo, snapshot, app.Engine.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Leave different current finding titles so the history assertion
+		// cannot succeed merely because Findings renders the same text.
+		snapshot.Findings[0].Title = "Current active finding"
+		if err = s.Apply(repo, snapshot, app.Engine.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = s.SelectRepositories(map[string]bool{repos[0].ID: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/activity", "/"} {
+		r := request(app, "GET", path, nil, nil)
+		if r.Code != 200 || !strings.Contains(r.Body.String(), "Visible retained change") || strings.Contains(r.Body.String(), "Hidden paused change") {
+			t.Errorf("%s lost monitored history or included paused history", path)
+		}
+	}
+	r := request(app, "GET", "/repositories/view?id="+url.QueryEscape(repos[0].ID), nil, nil)
+	if r.Code != 200 || !strings.Contains(r.Body.String(), "Current active finding") {
+		t.Fatal("shared history query broke repository details")
 	}
 }
 

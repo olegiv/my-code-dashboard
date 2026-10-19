@@ -403,6 +403,48 @@ func TestBackupValidatesRecordsBeyondUIHistoryLimit(t *testing.T) {
 	}
 }
 
+func TestChangesLimitAppliesAfterMonitoredFilter(t *testing.T) {
+	s, monitored := fixture(t)
+	c, err := s.Connection(monitored.ConnectionID)
+	check(t, err)
+	check(t, s.SaveDiscovered(c, []model.Repository{{ExternalID: "43", Name: "example/paused"}}))
+	repos, err := s.Repositories()
+	check(t, err)
+	var paused model.Repository
+	for _, repo := range repos {
+		if repo.ID != monitored.ID {
+			paused = repo
+		}
+	}
+	for _, repo := range []model.Repository{monitored, paused} {
+		for i := range 201 {
+			at := time.Now().UTC()
+			change := model.Change{RepositoryID: repo.ID, FindingID: fmt.Sprint(i), At: at, Kind: "new"}
+			_, err = s.db.Exec("INSERT INTO changes(repository_id,at,data) VALUES(?,?,?)", repo.ID, at.Format(time.RFC3339Nano), encode(change))
+			check(t, err)
+		}
+	}
+	for _, repo := range []model.Repository{monitored, paused} {
+		check(t, s.SelectRepositories(map[string]bool{repo.ID: true}))
+		changes, err := s.Changes()
+		check(t, err)
+		if len(changes) != 200 {
+			t.Fatalf("got %d changes, want latest 200 monitored changes", len(changes))
+		}
+		for i, change := range changes {
+			if change.RepositoryID != repo.ID || change.FindingID != fmt.Sprint(200-i) {
+				t.Fatal("unmonitored changes displaced monitored history or order changed", change)
+			}
+		}
+	}
+	check(t, s.SelectRepositories(map[string]bool{}))
+	changes, err := s.Changes()
+	check(t, err)
+	if len(changes) != 0 {
+		t.Fatal("unmonitored history leaked into the default change feed")
+	}
+}
+
 func TestHistoryOrdersAndPrunesExactInstants(t *testing.T) {
 	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	for _, cutoff := range []time.Time{base, base.Add(time.Nanosecond), base.Add(100 * time.Millisecond)} {

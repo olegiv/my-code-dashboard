@@ -183,7 +183,10 @@ func (e *Engine) SavePreferences(hour, minute int, zone string, enabled bool, ch
 	s.Enabled = enabled
 	s.ChangesDays = changes
 	s.LogsDays = logs
-	return e.Store.SaveSettings(s)
+	if err = e.Store.SaveSettings(s); err != nil {
+		return err
+	}
+	return e.Store.Prune(e.Now(), s)
 }
 
 func (e *Engine) Start(trigger string) (string, bool, error) {
@@ -413,14 +416,18 @@ func (e *Engine) run(run model.Run) {
 func (e *Engine) Tick(now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.active != "" {
-		return nil
-	}
 	e.settingsMu.Lock()
 	defer e.settingsMu.Unlock()
 	s, err := e.Store.Settings()
-	if err != nil || !s.Enabled {
+	if err != nil {
 		return err
+	}
+	// Retention maintenance is independent of collection and its enabled state.
+	if err = e.Store.Prune(now, s); err != nil {
+		return err
+	}
+	if !s.Enabled || e.active != "" {
+		return nil
 	}
 	slot, err := model.LatestSlot(now, s)
 	if err != nil {
