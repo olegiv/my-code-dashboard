@@ -41,6 +41,32 @@ func TestVersionHelpAndUnsafeListener(t *testing.T) {
 	}
 }
 
+func TestListenerPortsBeforeSideEffects(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:99999", "[::1]:65536", "127.0.0.1:-1", "127.0.0.1:+80", "127.0.0.1:http", "127.0.0.1:18446744073709551616", "127.0.0.1:80 ", "127.0.0.1:", "[::1]", "0.0.0.0:7364"} {
+		t.Run(addr, func(t *testing.T) {
+			if err := validateAddress(addr); err == nil {
+				t.Error("invalid listener accepted; skipping commands to avoid service side effects")
+				return
+			}
+			for _, command := range []string{"serve", "service"} {
+				dir := filepath.Join(t.TempDir(), "absent")
+				var out bytes.Buffer
+				if err := run([]string{command, "--data-dir", dir, "--addr", addr}, &out); err == nil {
+					t.Fatal("invalid listener reached command execution")
+				}
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Fatal("invalid listener created installation state", err)
+				}
+			}
+		})
+	}
+	for _, addr := range []string{"127.0.0.1:0", "[::1]:0", "127.0.0.1:1", "127.0.0.1:80", "127.0.0.1:7364", "[::1]:65535", "127.0.0.1:00080"} {
+		if err := validateAddress(addr); err != nil {
+			t.Errorf("valid listener %s rejected: %v", addr, err)
+		}
+	}
+}
+
 func TestHeadlessCredentialIDCannotChangeProviderTarget(t *testing.T) {
 	dir := t.TempDir()
 	s, err := store.Open(filepath.Join(dir, "dashboard.sqlite"))

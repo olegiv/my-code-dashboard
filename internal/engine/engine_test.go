@@ -3,9 +3,11 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -348,7 +350,7 @@ func TestDiscoveryDoesNotOverwriteChangedCredentials(t *testing.T) {
 						t.Fatal("discovery overwrote the newly validated connection")
 					}
 				case "forget":
-					if stored.Status != "disconnected" || !strings.Contains(stored.Message, "removed") {
+					if stored.Status != "disconnected" || !strings.Contains(stored.Message, "Connection disconnected.") {
 						t.Fatal("discovery overwrote credential removal")
 					}
 				}
@@ -1000,6 +1002,97 @@ func TestCompleteReportRetainsOptionalMetadataBackoff(t *testing.T) {
 	settings, _ = e.Store.Settings()
 	if len(runs) != 2 || !settings.RetryAt.IsZero() {
 		t.Fatal("complete report did not resume after optional metadata backoff")
+	}
+}
+
+func TestForgetCredentialFailureOrdering(t *testing.T) {
+	for _, mode := range []string{"normal", "database failure", "deletion failure", "restored"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &fakeProvider{}
+			e, c := engineFixture(t, t.Context(), p)
+			c.Status = "connected"
+			c.ReconnectRequired = mode == "restored"
+			if err := e.Store.SaveConnection(c); err != nil {
+				t.Fatal(err)
+			}
+			repos, _ := e.Store.Repositories()
+			if err := e.Store.Apply(repos[0], model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open"}}}, e.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "deletion failure" {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, c.ID), []byte("synthetic-not-real"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				e.Secrets = secret.Files{Directory: dir}
+			}
+			if mode == "database failure" {
+				db, err := sql.Open("sqlite", e.Store.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if _, err = db.Exec("CREATE TRIGGER fail_connection_save BEFORE UPDATE ON connections BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END"); err != nil {
+					t.Fatal(err)
+				}
+				if err = e.ForgetCredential(c.ID); err == nil {
+					t.Fatal("failed metadata write reported success")
+				}
+				stored, readErr := e.Store.Connection(c.ID)
+				token, secretErr := e.Secrets.Get(c.ID)
+				if readErr != nil || stored != c || secretErr != nil || token != "synthetic-not-real" || e.connectionEpoch[c.ID] != 0 {
+					t.Fatal("failed metadata write changed connection, credential or epoch", readErr, secretErr)
+				}
+				if _, err = db.Exec("DROP TRIGGER fail_connection_save"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = e.adapter(stored); err != nil {
+					t.Fatal("failed forget broke the original usable connection", err)
+				}
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				err := e.ForgetCredential(c.ID)
+				if (err != nil) != (mode == "deletion failure") {
+					t.Fatal("unexpected forget result", err)
+				}
+				stored, err := e.Store.Connection(c.ID)
+				if err != nil || stored.Status != "disconnected" || stored.ReconnectRequired != c.ReconnectRequired || e.connectionEpoch[c.ID] != uint64(attempt+1) {
+					t.Fatal("disconnection not persisted", stored, err)
+				}
+				_, secretErr := e.Secrets.Get(c.ID)
+				if (secretErr == nil) != (mode == "deletion failure" || mode == "restored") {
+					t.Fatal("unexpected retained credential", secretErr)
+				}
+				calls := 0
+				resumed := New(t.Context(), e.Store, e.Secrets, false)
+				resumed.Factory = func(model.Connection, string) (provider.Provider, error) { calls++; return p, nil }
+				for i := 0; i < 2; i++ {
+					if err = resumed.Discover(t.Context(), c.ID); err == nil {
+						t.Fatal("disconnected discovery allowed")
+					}
+				}
+				if _, _, err = resumed.Start("manual"); err != nil {
+					t.Fatal(err)
+				}
+				resumed.Wait()
+				stored, err = e.Store.Connection(c.ID)
+				if err != nil || stored.Status != "disconnected" || calls != 0 {
+					t.Fatal("discovery or refresh reused a disconnected credential", stored, calls, err)
+				}
+			}
+			findings, err := e.Store.Findings()
+			if err != nil || len(findings) != 1 || findings[0].ID != "retained" || findings[0].State != "open" || findings[0].Missing {
+				t.Fatal("forget or failed collection changed retained active findings", err)
+			}
+			if mode != "deletion failure" {
+				if err = e.Connect(t.Context(), c, "synthetic-replacement"); err != nil {
+					t.Fatal(err)
+				}
+				if err = e.Discover(t.Context(), c.ID); err != nil {
+					t.Fatal("explicit reconnect did not restore access", err)
+				}
+			}
+		})
 	}
 }
 

@@ -46,8 +46,8 @@ func (e *Engine) adapter(c model.Connection) (provider.Provider, error) {
 	if e.Demo {
 		return e.Factory(c, "")
 	}
-	if c.ReconnectRequired {
-		return nil, errors.New("credential reconnection required after restore")
+	if c.ReconnectRequired || c.Status == "disconnected" {
+		return nil, errors.New("credential reconnection required")
 	}
 	token, err := e.Secrets.Get(c.ID)
 	if err != nil {
@@ -129,7 +129,9 @@ func (e *Engine) Discover(ctx context.Context, id string) error {
 		if kind == "error" {
 			message = "Discovery failed. Check the credential, network, and provider permissions."
 		}
-		c.Status = "error"
+		if c.Status != "disconnected" {
+			c.Status = "error"
+		}
 		c.Message = message
 		_ = e.Store.SaveConnection(c)
 		return errors.New(message)
@@ -149,15 +151,18 @@ func (e *Engine) ForgetCredential(id string) error {
 	if err != nil {
 		return errors.New("connection not found")
 	}
-	if !c.ReconnectRequired {
-		if err = e.Secrets.Delete(id); err != nil {
-			return errors.New("could not remove credential from the credential backend")
-		}
+	c.Status = "disconnected"
+	c.Message = "Connection disconnected. Revoke the token at the provider if required. Existing findings are retained."
+	if err = e.Store.SaveConnection(c); err != nil {
+		return err
 	}
 	e.connectionEpoch[id]++
-	c.Status = "disconnected"
-	c.Message = "Local credential removed. Revoke the token at the provider if required. Existing findings are retained."
-	return e.Store.SaveConnection(c)
+	if !c.ReconnectRequired {
+		if err = e.Secrets.Delete(id); err != nil {
+			return errors.New("connection disconnected, but could not remove credential from the credential backend; retry removal")
+		}
+	}
+	return nil
 }
 
 func (e *Engine) SavePreferences(hour, minute int, zone string, enabled bool, changes, logs int) error {

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -322,6 +323,9 @@ func validateAddress(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || port == "" {
 		return errors.New("--addr must contain a loopback IP and port")
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return errors.New("--addr port must be a decimal number between 0 and 65535")
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
