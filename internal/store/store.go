@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/olegiv/my-code-dashboard/internal/model"
+	"github.com/olegiv/my-code-dashboard/internal/provider"
 	_ "modernc.org/sqlite"
 )
 
@@ -146,36 +147,86 @@ func (s *Store) Repository(id string) (model.Repository, error) {
 }
 
 func (s *Store) SaveDiscovered(connection model.Connection, repos []model.Repository) error {
+	base, err := canonicalProviderBase(connection.BaseURL)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Reuse existing IDs so historical records and bookmarked URLs stay valid.
+	// Read typed records, as restored JSON can contain case-aliased field names.
+	rows, err := tx.Query("SELECT r.data,c.data FROM repositories r JOIN connections c ON c.id=r.connection_id")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]model.Repository{}
+	for rows.Next() {
+		var rawRepo, rawConnection string
+		if err = rows.Scan(&rawRepo, &rawConnection); err != nil {
+			return err
+		}
+		var old model.Repository
+		var owner model.Connection
+		if err = json.Unmarshal([]byte(rawRepo), &old); err != nil {
+			return err
+		}
+		if err = json.Unmarshal([]byte(rawConnection), &owner); err != nil {
+			return err
+		}
+		if owner.Provider != connection.Provider {
+			continue
+		}
+		origin, e := canonicalProviderBase(owner.BaseURL)
+		if e != nil {
+			return e
+		}
+		if origin != base {
+			continue
+		}
+		if prior, ok := existing[old.ExternalID]; ok && prior.ID != old.ID {
+			return errors.New("duplicate legacy repository identities for this provider URL; discovery stopped without merging their reports")
+		}
+		existing[old.ExternalID] = old
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
 	for _, r := range repos {
-		// Canonical IDs include the provider host; names and paths can change.
-		r.ID = connection.Provider + ":" + strings.TrimSuffix(connection.BaseURL, "/") + ":" + r.ExternalID
+		// New IDs use a canonical instance URL, including its installation path.
+		r.ID = connection.Provider + ":" + base + ":" + r.ExternalID
 		r.ConnectionID = connection.ID
 		r.Provider = connection.Provider
-		var raw string
-		err = tx.QueryRow("SELECT data FROM repositories WHERE id=?", r.ID).Scan(&raw)
-		if err == nil {
-			var old model.Repository
-			if err = json.Unmarshal([]byte(raw), &old); err != nil {
-				return err
-			}
+		if old, ok := existing[r.ExternalID]; ok {
+			r.ID = old.ID
 			r.Selected = old.Selected
 			if old.Selected {
 				r.ConnectionID = old.ConnectionID
 			}
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
 		}
 		_, err = tx.Exec("INSERT INTO repositories(id,connection_id,external_id,selected,data) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET connection_id=excluded.connection_id, selected=excluded.selected, data=excluded.data", r.ID, r.ConnectionID, r.ExternalID, r.Selected, encode(r))
 		if err != nil {
 			return err
 		}
+		existing[r.ExternalID] = r
 	}
 	return tx.Commit()
+}
+
+func canonicalProviderBase(raw string) (string, error) {
+	base, err := provider.ValidateBase(raw)
+	if err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(base)
+	u.Host = strings.TrimSuffix(strings.ToLower(u.Host), ":443")
+	return u.String(), nil
 }
 
 func (s *Store) SaveRepository(r model.Repository) error {

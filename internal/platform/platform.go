@@ -325,7 +325,9 @@ func InstallService(ctx context.Context, dir, addr, installation string) error {
 		if err == nil {
 			err = dst.Chmod(0755)
 		}
-		dst.Close()
+		if closeErr := dst.Close(); err == nil {
+			err = closeErr
+		}
 		if err != nil {
 			return err
 		}

@@ -63,6 +63,10 @@ For GitHub code scanning, both the alert list and analysis list must finish befo
 
 Analysis freshness uses each tool/category/ref stream's latest successful analysis and displays the oldest of those successes. A newer failed upload keeps the stream's earlier success in that calculation and marks coverage with a warning. A stream with no successful analysis contributes no timestamp; if none succeeded, analysis time remains **Not reported**. These calculations use only the analysis history returned by the provider.
 
+Tool name, category and ref are independent stream identifiers, including any slashes inside them. A tool named `A/B` with category `C` stays separate from tool `A` with category `B/C`; neither can hide the other's warning or successful analysis evidence.
+
+GitLab instances may specify HTTPS port 443 explicitly. Redirects, pagination and repository/finding links accept either its explicit or omitted form for the same hostname. Scheme changes, other hosts, user information and different effective ports remain rejected; TLS certificate verification is unchanged.
+
 Collection is stale after 48 hours without success; supplied analysis evidence older than 48 hours is highlighted independently. Missing provider analysis timestamps are displayed as **Not reported**. Coverage notes retain explicit scope limitations.
 
 **Activity** separates completed imports, disabled scanners, missing analysis, unsupported sources, and actual failures. Expand a refresh's repository/category details to see its saved reasons and links to repository coverage. The latest refresh with noteworthy outcomes opens automatically. Earlier versions saved only aggregate counts and may have counted coverage gaps as failures; those rows are explicitly labeled legacy results. No historical reasons are inferred from current coverage.

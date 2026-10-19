@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -329,6 +330,90 @@ func TestSafeBaseAndFindingURLs(t *testing.T) {
 		t.Fatal("GitHub API host substitution allowed")
 	}
 }
+
+type originFixtureTransport func(*http.Request) (*http.Response, error)
+
+func (f originFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestDefaultPortOrigins(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, link string
+		allowed          bool
+	}{
+		{"ordinary HTTPS", "https://gitlab.example", "https://gitlab.example/group/project", true},
+		{"canonical port omitted", "https://gitlab.example:443", "https://gitlab.example/group/project", true},
+		{"canonical port explicit", "https://gitlab.example", "https://gitlab.example:443/group/project", true},
+		{"host case", "https://gitlab.example:443", "https://GITLAB.example/group/project", true},
+		{"nondefault matching", "https://gitlab.example:8443", "https://gitlab.example:8443/group/project", true},
+		{"IPv6 default port", "https://[::1]:443", "https://[::1]/group/project", true},
+		{"foreign host", "https://gitlab.example:443", "https://unrelated.example/group/project", false},
+		{"nondefault port added", "https://gitlab.example", "https://gitlab.example:8443/group/project", false},
+		{"nondefault port removed", "https://gitlab.example:8443", "https://gitlab.example/group/project", false},
+		{"HTTP downgrade", "https://gitlab.example:443", "http://gitlab.example:443/group/project", false},
+		{"userinfo", "https://gitlab.example:443", "https://user@gitlab.example/group/project", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newAPI(tc.base, "synthetic-token-not-real")
+			var calls int
+			a.client.Transport = originFixtureTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if !tc.allowed || r.URL.String() != tc.link || r.Header.Get("Authorization") != "Bearer synthetic-token-not-real" {
+					t.Error("request escaped the allowed origin or lost authentication")
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`[]`)), Request: r}, nil
+			})
+			if got := SafeURL(tc.link, tc.base); (got != "") != tc.allowed || got != "" && got != tc.link {
+				t.Errorf("SafeURL = %q, allowed = %v", got, tc.allowed)
+			}
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tc.link, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = a.client.CheckRedirect(req, nil); (err == nil) != tc.allowed {
+				t.Errorf("redirect: %v, allowed = %v", err, tc.allowed)
+			}
+			_, err = a.request(t.Context(), http.MethodGet, tc.link, nil, nil)
+			if (err == nil) != tc.allowed || tc.allowed && calls != 1 || !tc.allowed && calls != 0 {
+				t.Fatalf("request: calls = %d, err = %v, allowed = %v", calls, err, tc.allowed)
+			}
+		})
+	}
+	t.Run("GitLab discovery redirect and pagination", func(t *testing.T) {
+		const base = "https://gitlab.example:443"
+		a := newAPI(base+"/api/v4", "synthetic-token-not-real")
+		calls := 0
+		a.client.Transport = originFixtureTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.URL.Scheme != "https" || r.URL.Hostname() != "gitlab.example" || r.Header.Get("Authorization") != "Bearer synthetic-token-not-real" {
+				t.Error("unexpected provider recipient or missing authentication")
+			}
+			w := httptest.NewRecorder()
+			switch {
+			case r.URL.Port() == "443":
+				w.Header().Set("Location", "https://gitlab.example/api/v4/projects")
+				w.WriteHeader(http.StatusFound)
+			case r.URL.Query().Get("page") == "2":
+				fmt.Fprint(w, `[{"id":2,"path_with_namespace":"example/two","web_url":"https://gitlab.example/example/two"}]`)
+			default:
+				w.Header().Set("Link", `<https://gitlab.example/api/v4/projects?page=2>; rel="next"`)
+				fmt.Fprint(w, `[{"id":1,"path_with_namespace":"example/one","web_url":"https://gitlab.example/example/one"}]`)
+			}
+			return w.Result(), nil
+		})
+		g := gitlab{api: a, base: base}
+		repos, err := g.Discover(t.Context())
+		if err != nil || calls != 3 || len(repos) != 2 || repos[0].URL != "https://gitlab.example/example/one" || repos[1].URL != "https://gitlab.example/example/two" {
+			t.Fatalf("canonical GitLab discovery: repos=%+v calls=%d err=%v", repos, calls, err)
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.client.CheckRedirect(req, make([]*http.Request, 5)) == nil {
+			t.Fatal("redirect limit was removed")
+		}
+	})
+}
 func TestGitHubSecretValuesAreNeverImported(t *testing.T) {
 	var calls atomic.Int32
 	a := mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +612,10 @@ func TestGitHubLastSuccessfulAnalysisPerStream(t *testing.T) {
 	const newSuccess = `{"created_at":"2026-10-19T09:00:00Z","ref":"refs/heads/main","commit_sha":"new-success","tool":{"name":"B"},"category":"config"}`
 	const failedUpload = `{"created_at":"2026-10-19T10:00:00Z","ref":"refs/heads/main","commit_sha":"failed-upload","error":"synthetic upload error","tool":{"name":"A"},"category":"go"}`
 	const warningUpload = `{"created_at":"2026-10-19T10:00:00Z","ref":"refs/heads/main","commit_sha":"warning-success","warning":"synthetic warning","tool":{"name":"B"},"category":"config"}`
+	slashTool := strings.ReplaceAll(strings.ReplaceAll(oldSuccess, `"name":"A"`, `"name":"A/B"`), `"category":"go"`, `"category":"C"`)
+	slashCategory := strings.ReplaceAll(strings.ReplaceAll(newSuccess, `"name":"B"`, `"name":"A"`), `"category":"config"`, `"category":"B/C"`)
+	slashRef := strings.ReplaceAll(strings.ReplaceAll(slashTool, `"category":"C"`, `"category":"C/refs"`), `"ref":"refs/heads/main"`, `"ref":"heads/main"`)
+	slashRef = strings.ReplaceAll(strings.ReplaceAll(slashRef, "2026-10-15", "2026-10-19"), "old-success", "new-success")
 	for _, tc := range []struct {
 		name, analyses, date, commit, state string
 	}{
@@ -536,6 +625,9 @@ func TestGitHubLastSuccessfulAnalysisPerStream(t *testing.T) {
 		{"stream without success", failedUpload + "," + newSuccess, "2026-10-19T09:00:00Z", "new-success", "warning"},
 		{"no successful analysis", failedUpload, "", "", "warning"},
 		{"successful warning", warningUpload, "2026-10-19T10:00:00Z", "warning-success", "warning"},
+		{"slash tool and category stay separate", slashTool + "," + slashCategory, "2026-10-15T09:00:00Z", "old-success", "observed"},
+		{"slash warning stays visible", strings.Replace(slashTool, `"commit_sha":"old-success"`, `"commit_sha":"old-success","warning":"synthetic warning"`, 1) + "," + slashCategory, "2026-10-15T09:00:00Z", "old-success", "warning"},
+		{"slash category and ref stay separate", slashTool + "," + slashRef, "2026-10-15T09:00:00Z", "old-success", "observed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := github{browser: "https://github.com"}
@@ -563,6 +655,9 @@ func TestGitHubLastSuccessfulAnalysisPerStream(t *testing.T) {
 			}
 			if tc.date != "" && snap.Coverage.Ref != "refs/heads/main" {
 				t.Fatal("analysis ref omitted")
+			}
+			if strings.HasPrefix(tc.name, "slash") && !strings.Contains(snap.Coverage.Note, "2 tool/category analysis streams;") {
+				t.Fatal("distinct streams merged", snap.Coverage.Note)
 			}
 		})
 	}

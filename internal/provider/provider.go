@@ -83,7 +83,7 @@ type api struct {
 func newAPI(base, token string) *api {
 	u, _ := url.Parse(base)
 	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if req.URL.Scheme != u.Scheme || !strings.EqualFold(req.URL.Host, u.Host) || req.URL.User != nil {
+		if !sameOrigin(req.URL, u) || req.URL.User != nil {
 			return errors.New("cross-origin redirect rejected")
 		}
 		if len(via) >= 5 {
@@ -94,7 +94,22 @@ func newAPI(base, token string) *api {
 	return &api{base: strings.TrimSuffix(base, "/"), token: token, client: client}
 }
 
-func sameOrigin(a, b *url.URL) bool { return a.Scheme == b.Scheme && strings.EqualFold(a.Host, b.Host) }
+func sameOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		switch u.Scheme {
+		case "https":
+			return "443"
+		case "http":
+			return "80"
+		default:
+			return ""
+		}
+	}
+	return a.Scheme == b.Scheme && a.Hostname() != "" && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
 
 func connectionFailure(err error) *Error {
 	message := "Cannot reach provider. Check network access and TLS trust."

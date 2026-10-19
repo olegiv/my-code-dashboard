@@ -197,12 +197,13 @@ func (g *github) code(ctx context.Context, path, branch string) model.Snapshot {
 		return failed("code", err)
 	}
 	if len(analyses) > 0 {
-		latest := map[string]ghAnalysis{}
-		successful := map[string]ghAnalysis{}
+		type stream struct{ tool, category, ref string }
+		latest := map[stream]ghAnalysis{}
+		successful := map[stream]ghAnalysis{}
 		var oldest time.Time
 		issues := 0
 		for _, a := range analyses {
-			key := a.Tool.Name + "/" + a.Category + "/" + a.Ref
+			key := stream{a.Tool.Name, a.Category, a.Ref}
 			prior, ok := latest[key]
 			if !ok || a.CreatedAt.After(prior.CreatedAt) {
 				latest[key] = a

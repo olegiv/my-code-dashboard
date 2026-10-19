@@ -77,6 +77,9 @@ func TestRestoredFindingLinksStayWithinProvider(t *testing.T) {
 			{name: "empty", valid: true},
 			{name: "GitLab HTTPS", link: "https://attacker.example/group/project/-/vulnerabilities/42", valid: true},
 			{name: "GitLab host case", link: "https://ATTACKER.example/group/project/-/vulnerabilities/42", valid: true},
+			{name: "GitLab explicit default port", link: "https://attacker.example:443/group/project/-/vulnerabilities/42", valid: true},
+			{name: "GitLab omitted default port", link: "https://attacker.example/group/project/-/vulnerabilities/42", connection: `UPDATE connections SET data=json_set(data,'$.base_url','https://attacker.example:443');`, valid: true},
+			{name: "GitLab nondefault port omitted", link: "https://attacker.example/group/project/-/vulnerabilities/42", connection: `UPDATE connections SET data=json_set(data,'$.base_url','https://attacker.example:8443');`},
 			{name: "GitLab configured port and subpath", link: "https://attacker.example:8443/gitlab/group/project/-/vulnerabilities/42", connection: `UPDATE connections SET data=json_set(data,'$.base_url','https://attacker.example:8443/gitlab');`, valid: true},
 			{name: "foreign host", link: "https://unrelated.example/phishing"},
 			{name: "lookalike host", link: "https://attacker.example.unrelated.example/phishing"},
@@ -86,6 +89,7 @@ func TestRestoredFindingLinksStayWithinProvider(t *testing.T) {
 			{name: "network path", link: "//attacker.example/vulnerabilities/42"},
 			{name: "different port", link: "https://attacker.example:8443/vulnerabilities/42"},
 			{name: "GitHub HTTPS", link: "https://github.com/example/project/security/code-scanning/42", connection: `UPDATE connections SET data=json_set(data,'$.provider','github','$.base_url','https://github.com');`, valid: true},
+			{name: "GitHub explicit default port", link: "https://github.com:443/example/project/security/code-scanning/42", connection: `UPDATE connections SET data=json_set(data,'$.provider','github','$.base_url','https://github.com');`, valid: true},
 			{name: "GitHub foreign", link: "https://unrelated.example/phishing", connection: `UPDATE connections SET data=json_set(data,'$.provider','github','$.base_url','https://github.com');`},
 			{name: "GitHub forged base", link: "https://attacker.example/phishing", connection: `UPDATE connections SET data=json_set(data,'$.provider','github');`},
 		} {

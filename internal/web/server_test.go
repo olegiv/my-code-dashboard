@@ -321,6 +321,54 @@ func TestActivityShowsHistoricalRepositoryCategoryAndSafeReasons(t *testing.T) {
 	}
 }
 
+func TestPaginationKeepsPageShell(t *testing.T) {
+	app := appFixture(t, true)
+	repos, err := app.Engine.Store.Repositories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := repos[0]
+	var findings []model.Finding
+	for i := range 51 {
+		findings = append(findings, model.Finding{ID: fmt.Sprint(i), Source: "fixture", Title: "Synthetic active issue", State: "open", NativeState: "open", Severity: "high"})
+	}
+	if err = app.Engine.Store.Apply(repo, model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: findings}, app.Engine.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []struct{ path, name string }{
+		{"/", "overview"},
+		{"/repositories/view?id=" + url.QueryEscape(repo.ID), "repository"},
+		{"/findings?repo=" + url.QueryEscape(repo.ID), "findings"},
+	} {
+		t.Run(page.name, func(t *testing.T) {
+			response := request(app, "GET", page.path, nil, nil)
+			re := regexp.MustCompile(`<a class="button secondary small-button" href="([^"]+)"([^>]*?)>Next →</a>`)
+			link := re.FindStringSubmatch(response.Body.String())
+			if response.Code != 200 || len(link) != 3 {
+				t.Fatal("missing next-page link")
+			}
+			useHTMX := strings.Contains(link[2], "hx-get=")
+			if useHTMX != (page.name == "findings") {
+				t.Errorf("cross-page navigation uses fragment swap: %s", link[0])
+			}
+			headers := map[string]string{}
+			if useHTMX {
+				headers["HX-Request"] = "true"
+			}
+			nextURL := html.UnescapeString(link[1])
+			parsed, err := url.Parse(nextURL)
+			if err != nil || parsed.Path != "/findings" || parsed.Query().Get("page") != "2" || parsed.Query().Get("state") != "open" || page.name != "overview" && parsed.Query().Get("repo") != repo.ID {
+				t.Fatal("pagination lost active/repository scope", nextURL, err)
+			}
+			response = request(app, "GET", nextURL, nil, headers)
+			full := strings.Contains(response.Body.String(), "<!doctype") && strings.Contains(response.Body.String(), `class="filters"`)
+			if response.Code != 200 || full != (page.name != "findings") {
+				t.Errorf("wrong destination page shell: full=%v status=%d", full, response.Code)
+			}
+		})
+	}
+}
+
 func TestFindingPaginationAndStaleEvidence(t *testing.T) {
 	app := appFixture(t, true)
 	repos, _ := app.Engine.Store.Repositories()

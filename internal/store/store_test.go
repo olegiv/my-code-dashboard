@@ -40,6 +40,96 @@ func check(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+func TestDiscoveredRepositoryCanonicalIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second, canonical string
+		legacy                         bool
+		count                          int
+	}{
+		{"same spelling", "https://gitlab.example", "https://gitlab.example", "https://gitlab.example", false, 1},
+		{"default port omitted", "https://gitlab.example:443", "https://gitlab.example", "https://gitlab.example", false, 1},
+		{"default port added", "https://gitlab.example", "https://GITLAB.example:443", "https://gitlab.example", false, 1},
+		{"legacy ID and subpath", "https://GITLAB.example:443/gitlab", "https://gitlab.example/gitlab", "https://gitlab.example/gitlab", true, 1},
+		{"different port", "https://gitlab.example:8443", "https://gitlab.example", "https://gitlab.example:8443", false, 2},
+		{"different subpath", "https://gitlab.example/gitlab", "https://gitlab.example/other", "https://gitlab.example/gitlab", false, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Open(filepath.Join(t.TempDir(), "dashboard.sqlite"))
+			check(t, err)
+			defer s.Close()
+			first := model.Connection{ID: "first", Provider: "gitlab", BaseURL: tc.first}
+			check(t, s.SaveConnection(first))
+			check(t, s.SaveDiscovered(first, []model.Repository{{ExternalID: "42", Name: "example/original"}}))
+			repos, err := s.Repositories()
+			check(t, err)
+			repo := repos[0]
+			if !tc.legacy && repo.ID != "gitlab:"+tc.canonical+":42" {
+				t.Errorf("new repository ID was not canonical: %q", repo.ID)
+			}
+			if tc.legacy {
+				legacyID := "gitlab:" + tc.first + ":42"
+				_, err = s.db.Exec("UPDATE repositories SET id=?,data=json_set(data,'$.id',?) WHERE id=?", legacyID, legacyID, repo.ID)
+				check(t, err)
+				repo.ID = legacyID
+			}
+			check(t, s.SelectRepositories(map[string]bool{repo.ID: true}))
+			now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+			snap := model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "1", Source: "fixture", State: "open", NativeState: "DETECTED", Severity: "high"}}}
+			check(t, s.Apply(repo, snap, now))
+			snap.Findings[0].Severity = "critical"
+			check(t, s.Apply(repo, snap, now.Add(time.Minute)))
+			second := model.Connection{ID: "second", Provider: "gitlab", BaseURL: tc.second}
+			check(t, s.SaveConnection(second))
+			check(t, s.SaveDiscovered(second, []model.Repository{{ExternalID: "42", Name: "example/renamed", Archived: true}}))
+			repos, err = s.Repositories()
+			check(t, err)
+			if len(repos) != tc.count {
+				t.Fatalf("equivalent connections duplicated repositories: %+v", repos)
+			}
+			retained, err := s.Repository(repo.ID)
+			check(t, err)
+			if !retained.Selected || retained.ConnectionID != first.ID || tc.count == 1 && (retained.Name != "example/renamed" || !retained.Archived) {
+				t.Fatal("rediscovery changed identity/selection/credential ownership or lost metadata", retained)
+			}
+			findings, err := s.Findings()
+			check(t, err)
+			changes, err := s.Changes()
+			check(t, err)
+			coverage, err := s.Coverage()
+			check(t, err)
+			if len(findings) != 1 || findings[0].RepositoryID != repo.ID || len(changes) != 1 || changes[0].RepositoryID != repo.ID || len(coverage) != 1 || coverage[0].RepositoryID != repo.ID {
+				t.Fatal("rediscovery duplicated or lost child records")
+			}
+			backup := filepath.Join(t.TempDir(), "backup.sqlite")
+			check(t, s.Backup(t.Context(), backup))
+			check(t, ValidateBackup(backup))
+		})
+	}
+	t.Run("ambiguous legacy duplicates fail atomically", func(t *testing.T) {
+		s, _ := fixture(t)
+		for i, base := range []string{"https://gitlab.example", "https://GITLAB.example:443"} {
+			c := model.Connection{ID: fmt.Sprint(i), Provider: "gitlab", BaseURL: base}
+			check(t, s.SaveConnection(c))
+			r := model.Repository{ID: "gitlab:" + base + ":42", ExternalID: "42", ConnectionID: c.ID, Provider: "gitlab", Name: "example/legacy", Selected: true}
+			_, err := s.db.Exec("INSERT INTO repositories VALUES(?,?,?,?,?)", r.ID, r.ConnectionID, r.ExternalID, 1, encode(r))
+			check(t, err)
+		}
+		before, err := s.Repositories()
+		check(t, err)
+		c, err := s.Connection("0")
+		check(t, err)
+		err = s.SaveDiscovered(c, []model.Repository{{ExternalID: "43", Name: "example/new"}, {ExternalID: "42", Name: "example/renamed"}})
+		if err == nil {
+			t.Fatal("conflicting legacy histories were silently merged")
+		}
+		after, err := s.Repositories()
+		check(t, err)
+		if encode(before) != encode(after) {
+			t.Fatal("failed discovery partially changed repositories")
+		}
+	})
+}
 func TestSnapshotsRetainDataOnFailureAndTrackLifecycle(t *testing.T) {
 	s, r := fixture(t)
 	now := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)

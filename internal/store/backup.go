@@ -7,9 +7,9 @@ import (
 	"errors"
 	"net/url"
 	"slices"
-	"strings"
 
 	"github.com/olegiv/my-code-dashboard/internal/model"
+	"github.com/olegiv/my-code-dashboard/internal/provider"
 )
 
 type schemaObject struct {
@@ -97,12 +97,8 @@ func validBackupProviderURL(raw string, connection model.Connection) bool {
 	default:
 		return false
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-		return false
-	}
 	origin, err := url.Parse(base)
-	return err == nil && origin.Scheme == "https" && origin.Hostname() != "" && origin.User == nil && strings.EqualFold(u.Host, origin.Host)
+	return err == nil && origin.Scheme == "https" && origin.Hostname() != "" && origin.User == nil && provider.SafeURL(raw, base) != ""
 }
 
 // Decode every row, including history outside the UI's paginated read limits.
