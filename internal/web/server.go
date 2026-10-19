@@ -83,6 +83,7 @@ func New(e *engine.Engine, dir, addr, version string) (*Server, error) {
 	}
 	s := &Server{Engine: e, DataDir: dir, Addr: addr, Version: version, csrf: hex.EncodeToString(token[:]), mux: http.NewServeMux()}
 	functions := template.FuncMap{
+		"trim": strings.TrimSpace,
 		"age": func(t time.Time) string {
 			if t.IsZero() {
 				return "Not reported"
@@ -453,7 +454,8 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 			s.redirect(w, r, "/connections", "error", "Connection not found.")
 			return
 		}
-		if c.Provider != old.Provider || c.BaseURL != old.BaseURL {
+		savedBase, e := provider.ValidateBase(old.BaseURL)
+		if e != nil || c.Provider != old.Provider || c.BaseURL != savedBase {
 			s.redirect(w, r, "/connections", "error", "Select the existing connection and verify its provider URL before entering a token. The submitted provider and URL must match the saved connection.")
 			return
 		}

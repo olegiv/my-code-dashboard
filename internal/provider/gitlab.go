@@ -321,7 +321,7 @@ func glCategory(report string) string {
 	switch strings.ToUpper(report) {
 	case "DEPENDENCY_SCANNING":
 		return "dependencies"
-	case "SAST", "SARIF":
+	case "SAST", "SAST_ADVANCED", "SARIF":
 		return "code"
 	case "SECRET_DETECTION":
 		return "secrets"
@@ -329,7 +329,7 @@ func glCategory(report string) string {
 		return "containers"
 	case "DAST", "API_FUZZING", "COVERAGE_FUZZING":
 		return "dast"
-	case "IAC", "IAC_SCANNING":
+	case "IAC", "IAC_SCANNING", "SAST_IAC":
 		return "iac"
 	default:
 		return "other"

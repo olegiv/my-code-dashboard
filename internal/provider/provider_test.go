@@ -717,6 +717,69 @@ func TestGitLabCapabilityPaginationRedactionAndCoverage(t *testing.T) {
 		t.Fatal("secret title was persisted")
 	}
 }
+func TestGitLabSASTScannerTypesPreserveCoverageAndFindings(t *testing.T) {
+	for _, tc := range []struct{ scanner, category string }{
+		{"SAST_ADVANCED", "code"}, {"SAST_IAC", "iac"}, {"SAST", "code"}, {"IAC_SCANNING", "iac"},
+	} {
+		for _, state := range []string{"observed", "enabled", "disabled", "unavailable"} {
+			t.Run(tc.scanner+"/"+state, func(t *testing.T) {
+				a := mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+					var body struct{ Query string }
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					switch {
+					case strings.Contains(body.Query, "DashboardCapabilities"):
+						fmt.Fprint(w, syntheticSchema)
+					case strings.Contains(body.Query, "DashboardScanners"):
+						available, enabled, ran := []string{}, []string{}, []string{}
+						if state != "unavailable" {
+							available = append(available, tc.scanner)
+						}
+						if state == "enabled" || state == "observed" {
+							enabled = append(enabled, tc.scanner)
+						}
+						if state == "observed" {
+							ran = append(ran, tc.scanner)
+						}
+						jsonReply(w, map[string]any{"data": map[string]any{"project": map[string]any{"securityScanners": map[string]any{"available": available, "enabled": enabled, "pipelineRun": ran}}}})
+					default:
+						fmt.Fprintf(w, `{"data":{"project":{"vulnerabilities":{"nodes":[{"id":"gid://gitlab/Vulnerability/1","title":"Synthetic advisory","state":"DETECTED","severity":"HIGH","reportType":%q}],"pageInfo":{"hasNextPage":false}}}}}`, tc.scanner)
+					}
+				})
+				g := gitlab{api: a, base: a.base}
+				snapshots := g.Collect(t.Context(), model.Repository{Name: "example/project"})
+				found := false
+				for _, snap := range snapshots {
+					if snap.Coverage.Category == "other" && len(snap.Findings) != 0 {
+						t.Fatal("known SAST type fell through to other")
+					}
+					if snap.Coverage.Category != tc.category {
+						continue
+					}
+					found = true
+					wantState := state
+					if tc.category == "iac" && state == "unavailable" {
+						wantState = "unknown"
+					}
+					if !snap.Complete || snap.Coverage.ScannerState != wantState || !snap.Coverage.AnalysisAt.IsZero() || len(snap.Findings) != 1 {
+						t.Fatalf("scanner coverage or findings lost: %+v", snap)
+					}
+					f := snap.Findings[0]
+					if f.Category != tc.category || f.State != "open" || f.NativeState != "DETECTED" || f.NativeSeverity != "HIGH" || f.Scanner != tc.scanner {
+						t.Fatal("native finding evidence was changed", f)
+					}
+					run := model.Run{Outcomes: []model.CollectionOutcome{{Collection: "success", ScannerState: snap.Coverage.ScannerState}}}
+					if (len(run.Attention()) != 0) != (state == "enabled" || state == "disabled") {
+						t.Fatal("enabled/disabled coverage gap lost downstream")
+					}
+				}
+				if !found {
+					t.Fatal("expected category was omitted")
+				}
+			})
+		}
+	}
+}
+
 func TestGitLabZeroInaccessibleErrorsAndSchemaGaps(t *testing.T) {
 	for _, tc := range []struct {
 		name, response string

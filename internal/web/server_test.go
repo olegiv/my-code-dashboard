@@ -581,21 +581,33 @@ func TestConnectionFormsKeepIdentifiersOutOfMutationPaths(t *testing.T) {
 
 func TestReconnectRejectsRecipientDifferentFromDisplayedForm(t *testing.T) {
 	for _, tc := range []struct {
-		name, provider, base string
-		accepted             bool
+		name, savedProvider, savedBase, provider, base string
+		accepted                                       bool
 	}{
-		{"default GitHub guidance", "github", "https://github.com", false},
-		{"different GitLab recipient", "gitlab", "https://other.example", false},
-		{"explicit matching recipient", "gitlab", "https://gitlab.example", true},
+		{"default GitHub guidance", "gitlab", "https://gitlab.example", "github", "https://github.com", false},
+		{"different GitLab recipient", "gitlab", "https://gitlab.example", "gitlab", "https://other.example", false},
+		{"explicit matching recipient", "gitlab", "https://gitlab.example", "gitlab", "https://gitlab.example", true},
+		{"restored GitHub slash", "github", "https://github.com/", "github", "https://github.com/", true},
+		{"normalized GitHub input", "github", "https://github.com/", "github", "https://github.com", true},
+		{"restored GitHub whitespace", "github", " https://github.com/ ", "github", " https://github.com/ ", true},
+		{"normalized whitespace input", "github", " https://github.com/ ", "github", "https://github.com", true},
+		{"restored GitLab installation", "gitlab", "https://gitlab.example:8443/gitlab/", "gitlab", "https://gitlab.example:8443/gitlab/", true},
+		{"normalized GitLab input", "gitlab", "https://gitlab.example:8443/gitlab/", "gitlab", "https://gitlab.example:8443/gitlab", true},
+		{"different installation path", "gitlab", "https://gitlab.example:8443/gitlab/", "gitlab", "https://gitlab.example:8443/other", false},
+		{"different port", "gitlab", "https://gitlab.example:8443/gitlab/", "gitlab", "https://gitlab.example:9443/gitlab", false},
+		{"different GitHub recipient", "github", "https://github.com/", "github", "https://other.example", false},
+		{"invalid saved target", "gitlab", "http://gitlab.example", "gitlab", "https://gitlab.example", false},
+		{"invalid submitted target", "gitlab", "https://gitlab.example/", "gitlab", "https://gitlab.example?query=value", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := appFixture(t, false)
-			c := model.Connection{ID: "imported", Name: `Personal GitHub "synthetic"`, Provider: "gitlab", BaseURL: "https://gitlab.example", ReconnectRequired: true}
+			c := model.Connection{ID: "imported", Name: `Personal GitHub "synthetic"`, Provider: tc.savedProvider, BaseURL: tc.savedBase, ReconnectRequired: true}
 			if err := app.Engine.Store.SaveConnection(c); err != nil {
 				t.Fatal(err)
 			}
 			page := request(app, "GET", "/connections", nil, nil).Body.String()
-			if !strings.Contains(page, `data-provider="gitlab" data-base-url="https://gitlab.example" data-name="`+html.EscapeString(c.Name)+`"`) || !strings.Contains(page, `x-on:change="existingChanged"`) || !strings.Contains(page, "Verify that URL before entering a token") {
+			displayedBase := strings.TrimSpace(c.BaseURL)
+			if !strings.Contains(page, `data-provider="`+c.Provider+`" data-base-url="`+html.EscapeString(displayedBase)+`" data-name="`+html.EscapeString(c.Name)+`"`) || !strings.Contains(page, `x-on:change="existingChanged"`) || !strings.Contains(page, "Verify that URL before entering a token") {
 				t.Fatal("reconnection selector omitted the escaped saved recipient or guidance")
 			}
 			calls := 0
@@ -615,6 +627,9 @@ func TestReconnectRejectsRecipientDifferentFromDisplayedForm(t *testing.T) {
 			if tc.accepted {
 				if calls != 1 || stored.ReconnectRequired || strings.Contains(response.Header().Get("Location"), "error=") {
 					t.Fatal("matching explicit recipient did not reconnect")
+				}
+				if token, err := app.Engine.Secrets.Get(c.ID); err != nil || token != "SYNTHETIC_RECONNECT_TOKEN" {
+					t.Fatal("matching recipient did not save the new credential")
 				}
 			} else if calls != 0 || !stored.ReconnectRequired || !strings.Contains(response.Header().Get("Location"), "error=") {
 				t.Fatal("reconnection sent a token to a recipient different from the submitted form")

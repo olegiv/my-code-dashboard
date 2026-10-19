@@ -52,7 +52,7 @@ func TestHeadlessCredentialIDCannotChangeProviderTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	for _, target := range []struct{ provider, base string }{{"gitlab", "https://another.example.com"}, {"github", "https://github.com"}} {
+	for _, target := range []struct{ provider, base string }{{"gitlab", "https://another.example.com"}, {"github", "https://github.com"}, {"gitlab", "https://gitlab.example.com:8443"}, {"gitlab", "https://gitlab.example.com/other"}} {
 		var out bytes.Buffer
 		err = run([]string{"connection", "--data-dir", dir, "--credential-dir", filepath.Join(dir, "missing-credentials"), "--credential-id", c.ID, "--name", "Synthetic", "--provider", target.provider, "--base-url", target.base}, &out)
 		if err == nil || !strings.Contains(err.Error(), "different credential ID") {
@@ -73,6 +73,35 @@ func TestHeadlessCredentialIDCannotChangeProviderTarget(t *testing.T) {
 	persisted, err := s.Connection(c.ID)
 	if err != nil || persisted.Provider != c.Provider || persisted.BaseURL != c.BaseURL {
 		t.Fatal("rejected target change modified the original connection")
+	}
+	for _, tc := range []struct{ name, provider, saved, normalized string }{
+		{"canonical GitHub", "github", "https://github.com", "https://github.com"},
+		{"restored GitHub slash", "github", "https://github.com/", "https://github.com"},
+		{"restored GitHub whitespace", "github", " https://github.com/ ", "https://github.com"},
+		{"canonical GitLab", "gitlab", "https://gitlab.example:8443/gitlab", "https://gitlab.example:8443/gitlab"},
+		{"restored GitLab installation", "gitlab", "https://gitlab.example:8443/gitlab/", "https://gitlab.example:8443/gitlab"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := model.Connection{ID: "restored", Provider: tc.provider, BaseURL: tc.saved, CreatedAt: c.CreatedAt, ReconnectRequired: true}
+			if err := s.SaveConnection(saved); err != nil {
+				t.Fatal(err)
+			}
+			for _, input := range []string{tc.saved, tc.normalized} {
+				var out bytes.Buffer
+				err := run([]string{"connection", "--data-dir", dir, "--credential-dir", filepath.Join(dir, "missing-credentials"), "--credential-id", saved.ID, "--name", "Synthetic", "--provider", saved.Provider, "--base-url", input}, &out)
+				if err == nil || !strings.Contains(err.Error(), "credential file is missing") {
+					t.Fatalf("matching restored target did not reach credential lookup: %v", err)
+				}
+			}
+			submitted := model.Connection{ID: saved.ID, Provider: saved.Provider, BaseURL: tc.normalized}
+			if err := preserveConnectionTarget(s, &submitted); err != nil || !submitted.CreatedAt.Equal(saved.CreatedAt) {
+				t.Fatal("normalized target rejected or lost creation time", err)
+			}
+			stored, err := s.Connection(saved.ID)
+			if err != nil || stored.Provider != saved.Provider || stored.BaseURL != saved.BaseURL || !stored.ReconnectRequired {
+				t.Fatal("missing credential changed the quarantined connection")
+			}
+		})
 	}
 }
 

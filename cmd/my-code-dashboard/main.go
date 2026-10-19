@@ -310,7 +310,8 @@ func preserveConnectionTarget(s *store.Store, c *model.Connection) error {
 	if err != nil {
 		return err
 	}
-	if old.Provider != c.Provider || old.BaseURL != c.BaseURL {
+	base, err := provider.ValidateBase(old.BaseURL)
+	if err != nil || old.Provider != c.Provider || base != c.BaseURL {
 		return errors.New("this connection belongs to another provider or URL; use a different credential ID")
 	}
 	c.CreatedAt = old.CreatedAt

@@ -40,16 +40,18 @@ If the optional scanner query is rate-limited after a complete vulnerability rep
 | Native report type | Dashboard category |
 | --- | --- |
 | Dependency scanning | Dependencies |
-| SAST / SARIF | Code / SAST |
+| SAST / Advanced SAST (`SAST_ADVANCED`) / SARIF | Code / SAST |
 | Secret detection | Secrets |
 | Container/cluster/registry image scanning | Containers |
-| IaC / IaC scanning, if exposed separately | IaC |
+| IaC / IaC scanning / SAST IaC (`SAST_IAC`), if exposed separately | IaC |
 | DAST / API fuzzing / coverage fuzzing | DAST |
 | Other or newly introduced report types | Other |
 
 Actual scanner names are retained if the schema exposes them, otherwise the native report type is shown. Secret findings use a generic title; source/location/description fields are never requested. GitLab's existing persistent report usually represents default/tracked refs, not every branch or pipeline's ephemeral finding history. It can retain a detected vulnerability after a scanner no longer detects it; the dashboard preserves GitLab's lifecycle instead of inventing resolution.
 
 Where supported, `Project.securityScanners { available enabled pipelineRun }` provides separate configured/latest-pipeline evidence. An enabled scanner absent from `pipelineRun` remains a coverage gap in the portfolio, repository details and refresh activity, even when its historical findings import successfully. This is not a failed API request and does not trigger collection-failure retries. It does not supply scan timestamps; a category with zero reported findings and unknown evidence stays unknown. IaC can be contained in SAST, and scanner lists are not a guarantee of distinct category parity. A category absent from the available list indicates unavailable standalone scanner evidence, not proof that no related analysis occurred.
+
+The documented [`SecurityScannerType` values](https://docs.gitlab.com/api/graphql/reference/experimental/enums/#securityscannertype) `SAST_ADVANCED` and `SAST_IAC` map to Code and IaC respectively, for both scanner evidence and report types returned with those names. Observed, enabled, disabled and unavailable states retain their existing meanings; unavailable standalone IaC evidence remains unknown because IaC can also be included in SAST.
 
 Setup guidance: use the project's **Secure / Security configuration** and **Vulnerability report**, inspect CI security report artifacts and default/tracked-ref pipelines, and have an administrator confirm role/license/features when the API is denied. Keep corporate scanners inside corporate CI infrastructure. This app does not download their artifacts, source, or pipeline logs or trigger jobs.
 

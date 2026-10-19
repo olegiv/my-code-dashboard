@@ -22,6 +22,7 @@ type fakeProvider struct {
 	retryAt        time.Time
 	snapshots      []model.Snapshot
 	metadata       func(model.Repository) (model.Repository, error)
+	collect        func(context.Context, model.Repository) []model.Snapshot
 }
 
 func (f *fakeProvider) Validate(context.Context) (provider.Identity, error) {
@@ -93,7 +94,10 @@ func TestInvalidMetadataRetainsFindingsAndValidBackups(t *testing.T) {
 		})
 	}
 }
-func (f *fakeProvider) Collect(context.Context, model.Repository) []model.Snapshot {
+func (f *fakeProvider) Collect(ctx context.Context, r model.Repository) []model.Snapshot {
+	if f.collect != nil {
+		return f.collect(ctx, r)
+	}
 	if f.snapshots != nil {
 		return f.snapshots
 	}
@@ -172,6 +176,152 @@ func TestDiscoveryDoesNotOverwriteChangedCredentials(t *testing.T) {
 				default:
 					if discoveryErr != nil || stored.Status != "connected" || len(repos) != 2 {
 						t.Fatal("unchanged connection did not accept normal discovery")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRefreshDiscardsResultsAfterCredentialChanges(t *testing.T) {
+	for _, stage := range []string{"metadata", "findings"} {
+		for _, mutation := range []string{"reconnect", "forget", "unchanged"} {
+			t.Run(stage+"/"+mutation, func(t *testing.T) {
+				p := &fakeProvider{}
+				e, c := engineFixture(t, t.Context(), p)
+				if err := e.Store.SaveDiscovered(c, []model.Repository{{ExternalID: "2", Name: "example/second"}}); err != nil {
+					t.Fatal(err)
+				}
+				other := model.Connection{ID: "independent", Provider: "github", BaseURL: "https://github.com"}
+				if err := e.Store.SaveConnection(other); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Secrets.Set(other.ID, "synthetic-independent"); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.Store.SaveDiscovered(other, []model.Repository{{ExternalID: "3", Name: "zzz/independent"}}); err != nil {
+					t.Fatal(err)
+				}
+				e.Factory = func(connection model.Connection, _ string) (provider.Provider, error) {
+					if connection.ID == other.ID {
+						return &fakeProvider{}, nil
+					}
+					return p, nil
+				}
+				repos, err := e.Store.Repositories()
+				if err != nil {
+					t.Fatal(err)
+				}
+				selection := map[string]bool{}
+				before := e.Now().Add(-time.Hour)
+				for _, repo := range repos {
+					selection[repo.ID] = true
+					if err = e.Store.Apply(repo, model.Snapshot{Complete: true, Coverage: model.Coverage{Category: "code", Note: "Previous complete report", AnalysisAt: before, Ref: "main", Commit: "prior"}, Findings: []model.Finding{{ID: "retained", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}, before); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err = e.Store.SelectRepositories(selection); err != nil {
+					t.Fatal(err)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				t.Cleanup(func() {
+					select {
+					case <-release:
+					default:
+						close(release)
+					}
+					e.Wait()
+				})
+				metadataCalls, findingCalls := 0, 0
+				p.metadata = func(repo model.Repository) (model.Repository, error) {
+					metadataCalls++
+					if stage == "metadata" && metadataCalls == 1 {
+						close(started)
+						<-release
+					}
+					repo.Name += "/renamed"
+					return repo, nil
+				}
+				p.collect = func(context.Context, model.Repository) []model.Snapshot {
+					findingCalls++
+					if stage == "findings" && findingCalls == 1 {
+						close(started)
+						<-release
+					}
+					return []model.Snapshot{{Complete: true, Coverage: model.Coverage{Category: "code"}, Findings: []model.Finding{{ID: "new", Source: "synthetic", State: "open", NativeState: "DETECTED"}}}}
+				}
+				if _, _, err = e.Start("manual"); err != nil {
+					t.Fatal(err)
+				}
+				<-started
+				switch mutation {
+				case "reconnect":
+					c.Name = "Replacement connection"
+					err = e.Connect(t.Context(), c, "synthetic-replacement")
+				case "forget":
+					err = e.ForgetCredential(c.ID)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				e.Wait()
+				changed := mutation != "unchanged"
+				runs, err := e.Store.Runs()
+				if err != nil || len(runs) != 1 {
+					t.Fatal("refresh activity missing", err)
+				}
+				if changed {
+					if metadataCalls != 1 || findingCalls != map[string]int{"metadata": 0, "findings": 1}[stage] || runs[0].Succeeded != 1 || runs[0].Failed != 2*len(model.Categories) || len(runs[0].Attention()) != 2*len(model.Categories) {
+						t.Fatalf("stale provider reused or successful results recorded: metadata=%d findings=%d run=%+v", metadataCalls, findingCalls, runs[0])
+					}
+					for _, outcome := range runs[0].Attention() {
+						if outcome.Collection != "error" || !strings.Contains(outcome.Reason, "Connection changed during refresh") {
+							t.Fatal("discard reason missing from activity", outcome)
+						}
+					}
+				} else if metadataCalls != 2 || findingCalls != 2 || runs[0].Succeeded != 3 || runs[0].Failed != 0 {
+					t.Fatal("normal refresh did not complete", runs[0])
+				}
+				coverage, err := e.Store.Coverage()
+				if err != nil || len(coverage) != len(repos) {
+					t.Fatal("complete coverage records were lost or replaced", err)
+				}
+				for _, item := range coverage {
+					if changed && (item.RepositoryID == repos[0].ID || item.RepositoryID == repos[1].ID) && (!item.LastSuccess.Equal(before) || !item.LastAttempt.Equal(before) || !item.AnalysisAt.Equal(before) || item.Note != "Previous complete report" || item.Ref != "main" || item.Commit != "prior") {
+						t.Fatal("discarded refresh changed complete coverage", item)
+					}
+				}
+				findings, err := e.Store.Findings()
+				wantFindings := len(repos)
+				if !changed {
+					wantFindings += 2
+				}
+				if err != nil || len(findings) != wantFindings {
+					t.Fatal("active baseline findings were lost or stale results imported", err)
+				}
+				for _, finding := range findings {
+					if changed && (finding.RepositoryID == repos[0].ID || finding.RepositoryID == repos[1].ID) && (finding.ID != "retained" || finding.Missing || finding.NativeState != "DETECTED") {
+						t.Fatal("discarded findings changed the active baseline", finding)
+					}
+				}
+				fresh, err := e.Store.Repository(repos[0].ID)
+				if err != nil || changed && stage == "metadata" && fresh.Name != repos[0].Name {
+					t.Fatal("stale repository metadata was saved", fresh, err)
+				}
+				if changed {
+					if mutation == "forget" {
+						if err = e.Connect(t.Context(), c, "synthetic-replacement"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if _, _, err = e.Start("manual"); err != nil {
+						t.Fatal(err)
+					}
+					e.Wait()
+					runs, _ = e.Store.Runs()
+					if len(runs) != 2 || runs[0].Succeeded+runs[1].Succeeded != 4 || runs[0].Failed+runs[1].Failed != 2*len(model.Categories) {
+						t.Fatal("fresh refresh did not use the current connection", runs)
 					}
 				}
 			})

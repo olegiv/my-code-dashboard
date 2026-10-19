@@ -80,6 +80,11 @@ func validateBackupConnections(db *sql.DB) (map[string]model.Connection, error) 
 		if !textKey || !textData || key == "" || json.Unmarshal([]byte(raw), &connection) != nil || connection.ID != key || connections[connection.ID].ID != "" {
 			return nil, errors.New("backup has inconsistent connection identities")
 		}
+		// Optional links cannot establish whether a connection itself is usable.
+		base, err := provider.ValidateBase(connection.BaseURL)
+		if err != nil || (connection.Provider != "github" && connection.Provider != "gitlab") || (connection.Provider == "github" && base != "https://github.com") {
+			return nil, errors.New("backup has an invalid provider connection")
+		}
 		connections[connection.ID] = connection
 	}
 	return connections, rows.Err()

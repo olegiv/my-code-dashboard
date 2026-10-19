@@ -361,7 +361,7 @@ func TestBackupAcceptsCanonicalSchemaAndEncodedConnectionID(t *testing.T) {
 	// JSON escaping changes representation, not the decoded credential identity.
 	_, err = s.db.Exec("UPDATE connections SET data=? WHERE id=?", string(raw), c.ID)
 	check(t, err)
-	_, err = s.db.Exec(`UPDATE connections SET data='{"ID":"ignored","id":"\u0066ixture"}' WHERE id='fixture'`)
+	_, err = s.db.Exec(`UPDATE connections SET data='{"ID":"ignored","id":"\u0066ixture","provider":"github","base_url":"https://github.com"}' WHERE id='fixture'`)
 	check(t, err)
 	path := filepath.Join(t.TempDir(), "valid.sqlite")
 	check(t, s.Backup(t.Context(), path))

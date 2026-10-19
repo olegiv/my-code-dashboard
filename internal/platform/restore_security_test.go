@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -140,6 +141,89 @@ func TestRestoredFindingLinksStayWithinProvider(t *testing.T) {
 				copies, _ := filepath.Glob(filepath.Join(dir, "before-restore-*"))
 				if len(copies) != 0 {
 					t.Fatal("unsafe archive reached destination replacement")
+				}
+			})
+		}
+	}
+}
+
+func TestRestoreValidatesConnectionsWithEmptyLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, base string
+		valid                bool
+	}{
+		{"GitHub", "github", "https://github.com", true},
+		{"GitHub trailing slash", "github", "https://github.com/", true},
+		{"GitLab", "gitlab", "https://gitlab.example", true},
+		{"GitLab path and port", "gitlab", "https://GITLAB.example:8443/gitlab", true},
+		{"empty target", "gitlab", "", false},
+		{"relative target", "gitlab", "gitlab.example", false},
+		{"HTTP", "gitlab", "http://gitlab.example", false},
+		{"malformed", "gitlab", "https://gitlab.example:invalid", false},
+		{"credentials", "gitlab", "https://user@gitlab.example", false},
+		{"query", "gitlab", "https://gitlab.example?query=value", false},
+		{"fragment", "gitlab", "https://gitlab.example#fragment", false},
+		{"unknown provider", "unsupported", "https://gitlab.example", false},
+		{"empty provider", "", "https://gitlab.example", false},
+		{"GitHub foreign target", "github", "https://gitlab.example", false},
+		{"GitHub subpath", "github", "https://github.com/subpath", false},
+	} {
+		for _, unreferenced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/unreferenced=%t", tc.name, unreferenced), func(t *testing.T) {
+				mutation := `UPDATE repositories SET data=json_set(data,'$.url',''); UPDATE findings SET data=json_set(data,'$.url','');`
+				if unreferenced {
+					mutation += fmt.Sprintf(`INSERT INTO connections VALUES('unreferenced',json_object('id','unreferenced','provider','%s','base_url','%s'));`, tc.provider, tc.base)
+				} else {
+					mutation += fmt.Sprintf(`UPDATE connections SET data=json_set(data,'$.provider','%s','$.base_url','%s');`, tc.provider, tc.base)
+				}
+				archive := restoreSecurityArchive(t, mutation)
+				dir, destinationID := restoreSecurityDestination(t)
+				path := filepath.Join(dir, "dashboard.sqlite")
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = Restore(dir, archive)
+				if !tc.valid {
+					if err == nil {
+						t.Fatal("invalid connection bypassed empty-link validation")
+					}
+					after, readErr := os.ReadFile(path)
+					settings, settingsErr := store.ReadSettings(path)
+					copies, globErr := filepath.Glob(filepath.Join(dir, "before-restore-*"))
+					if readErr != nil || settingsErr != nil || globErr != nil || !bytes.Equal(before, after) || settings.InstallationID != destinationID || len(copies) != 0 {
+						t.Fatal("invalid connection reached destination replacement")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				s, err := store.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				connections, err := s.Connections()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, c := range connections {
+					if !c.ReconnectRequired {
+						t.Fatal("valid connection lost credential quarantine")
+					}
+				}
+				repos, repoErr := s.Repositories()
+				findings, findingErr := s.Findings()
+				if repoErr != nil || findingErr != nil || len(repos) != 1 || !repos[0].Selected || repos[0].URL != "" || len(findings) != 1 || findings[0].URL != "" || findings[0].NativeState != "DETECTED" {
+					t.Fatal("valid empty links lost selection or active findings")
+				}
+				c, err := s.Connection(repos[0].ConnectionID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = s.SaveDiscovered(c, []model.Repository{{ExternalID: "43", Name: "example/discovered"}}); err != nil {
+					t.Fatal("valid restored target blocked later discovery", err)
 				}
 			})
 		}

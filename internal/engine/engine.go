@@ -217,13 +217,10 @@ func (e *Engine) run(run model.Run) {
 		run.Failed++
 		run.Message = "Could not read repository selection."
 	}
-	connections, _ := e.Store.Connections()
-	byID := map[string]model.Connection{}
-	for _, c := range connections {
-		byID[c.ID] = c
-	}
 	adapters := map[string]provider.Provider{}
 	adapterErrors := map[string]error{}
+	epochs := map[string]uint64{}
+	connectionChanged := &provider.Error{Kind: "error", Message: "Connection changed during refresh; results were discarded and previous complete data was retained. Refresh again to use the current connection."}
 	var retryAt time.Time
 	for _, repo := range repos {
 		if !repo.Selected {
@@ -234,27 +231,51 @@ func (e *Engine) run(run model.Run) {
 		}
 		p := adapters[repo.ConnectionID]
 		pe := adapterErrors[repo.ConnectionID]
-		if p == nil && pe == nil {
-			p, pe = e.adapter(byID[repo.ConnectionID])
+		e.connectionsMu.Lock()
+		if _, captured := epochs[repo.ConnectionID]; !captured {
+			epochs[repo.ConnectionID] = e.connectionEpoch[repo.ConnectionID]
+			var c model.Connection
+			c, pe = e.Store.Connection(repo.ConnectionID)
+			if pe == nil {
+				p, pe = e.adapter(c)
+			}
 			if pe == nil {
 				adapters[repo.ConnectionID] = p
 			} else {
 				adapterErrors[repo.ConnectionID] = pe
 			}
 		}
+		if e.connectionEpoch[repo.ConnectionID] != epochs[repo.ConnectionID] {
+			pe = connectionChanged
+		}
+		e.connectionsMu.Unlock()
 		var snapshots []model.Snapshot
 		if pe == nil {
 			var fresh model.Repository
 			fresh, pe = p.RefreshRepository(ctx, repo)
 			if pe == nil {
-				if err = e.Store.SaveRepository(fresh); err != nil {
+				e.connectionsMu.Lock()
+				if e.connectionEpoch[repo.ConnectionID] != epochs[repo.ConnectionID] {
+					pe = connectionChanged
+				} else if err = e.Store.SaveRepository(fresh); err != nil {
 					pe = err
 				} else {
 					repo = fresh
 				}
+				e.connectionsMu.Unlock()
 			}
 		}
+		if pe == nil {
+			snapshots = p.Collect(ctx, repo)
+		}
+		// Serialize final writes with credential replacement/removal, never HTTP.
+		e.connectionsMu.Lock()
+		changed := e.connectionEpoch[repo.ConnectionID] != epochs[repo.ConnectionID]
+		if changed {
+			pe = connectionChanged
+		}
 		if pe != nil {
+			snapshots = nil
 			kind, message := provider.Failure(pe)
 			if strings.Contains(pe.Error(), "credential") {
 				kind = "denied"
@@ -268,11 +289,14 @@ func (e *Engine) run(run model.Run) {
 				}
 				snapshots = append(snapshots, model.Snapshot{Coverage: coverage})
 			}
-		} else {
-			snapshots = p.Collect(ctx, repo)
 		}
 		for _, snap := range snapshots {
 			outcome := model.CollectionOutcome{RepositoryID: repo.ID, RepositoryName: repo.Name, Provider: repo.Provider, Category: snap.Coverage.Category, Collection: snap.Coverage.Collection, ScannerState: snap.Coverage.ScannerState, Reason: snap.Coverage.Note}
+			if changed {
+				run.Failed++
+				run.Outcomes = append(run.Outcomes, outcome)
+				continue
+			}
 			if snap.Coverage.RetryAt.After(retryAt) {
 				retryAt = snap.Coverage.RetryAt
 			}
@@ -300,6 +324,7 @@ func (e *Engine) run(run model.Run) {
 			}
 			run.Outcomes = append(run.Outcomes, outcome)
 		}
+		e.connectionsMu.Unlock()
 		// Preserve completed repository outcomes if the application later stops.
 		_ = e.Store.SaveRun(run)
 	}
