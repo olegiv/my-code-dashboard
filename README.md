@@ -77,7 +77,7 @@ Build distribution archives without publishing:
 bash scripts/release.sh 0.1.0-dev
 ```
 
-This builds from the reviewed [public file manifest](scripts/release-files.txt) and prepares macOS/Linux arm64/amd64 archives and checksums under ignored `dist/`. Unlisted local files are excluded from both builds and archives. It never creates a Git tag or GitHub release. [Repository metadata and publication](docs/repository-creation.md) records the public repository and the initial publication workflow. No release is implied by this source tree.
+This builds from the reviewed [public file manifest](scripts/release-files.txt) and prepares macOS/Linux arm64/amd64 archives and checksums under ignored `dist/`. Unlisted local files are excluded from both builds and archives. It never creates a Git tag or GitHub release. Release notes live in [CHANGELOG.md](CHANGELOG.md); a release is cut as a GitHub draft from `main`, and publishing the draft creates its tag. [Repository metadata and publication](docs/repository-creation.md) records the public repository and the publication workflow.
 
 ## License
 
