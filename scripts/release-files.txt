@@ -70,6 +70,7 @@ internal/web/templates/pages.html
 internal/web/templates/shell.html
 scripts/browser-assets.sha256
 scripts/docker-check.sh
+scripts/docker-up.sh
 scripts/gate/gate_test.go
 scripts/gate/pr_test.go
 scripts/gate/release_test.go

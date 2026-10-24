@@ -1,4 +1,4 @@
-.PHONY: build demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check
+.PHONY: build demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check docker-up
 
 # Keep TLS behavior consistent across local, CI, and release builds.
 export GOTOOLCHAIN := go1.26.10
@@ -43,3 +43,6 @@ docker-build:
 
 docker-check:
 	bash scripts/docker-check.sh
+
+docker-up:
+	bash scripts/docker-up.sh

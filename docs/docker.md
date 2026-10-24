@@ -124,7 +124,7 @@ Run these commands from the project checkout. Paths under `~/.config/my-code-das
     docker compose logs dashboard
     ```
 
-    The log shows `Local: http://127.0.0.1:7365`, or port 7364 without `MCD_ADDR`.
+    The log shows `Local: http://127.0.0.1:7365`, or port 7364 without `MCD_ADDR`. Alternatively, `make docker-up` starts the service, waits until it answers and opens it in your default browser.
 
 11. **Finish in the browser.** Open that address.
     - In **Repositories**, discover your repositories and save the ones to monitor.
@@ -142,7 +142,7 @@ docker run --rm --network host my-code-dashboard:local serve --demo
 
 Open [http://127.0.0.1:7364](http://127.0.0.1:7364). The demo uses synthetic data in a temporary directory inside the container, accepts no credentials and makes no provider API calls. Exit with Ctrl+C.
 
-Like the release archives, the build compiles only files listed in [the public manifest](../scripts/release-files.txt); add a new source or asset file there before building the image. The build stage uses the pinned Go 1.26.10 image and the release archives' flags: CGO disabled, `-trimpath`, no VCS stamping and the `0.2.0-dev` version unless `VERSION` is overridden. Base images are pinned by digest. The runtime image is distroless `static` with the nonroot user (UID 65532) and no shell. `--open` is unavailable; open the printed URL yourself.
+Like the release archives, the build compiles only files listed in [the public manifest](../scripts/release-files.txt); add a new source or asset file there before building the image. The build stage uses the pinned Go 1.26.10 image and the release archives' flags: CGO disabled, `-trimpath`, no VCS stamping and the `0.2.0-dev` version unless `VERSION` is overridden. Base images are pinned by digest. The runtime image is distroless `static` with the nonroot user (UID 65532) and no shell. `--open` is unavailable inside the container; `make docker-up` starts the Compose service and opens the dashboard in your default browser instead.
 
 `/usr/share/doc/my-code-dashboard/` in the image contains `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `THIRD_PARTY_LICENSES.txt` generated from the image's executable, as in the release archives. The base image's Debian package notices remain under `/usr/share/doc`. If you distribute an image, also provide its corresponding source, for example the release script's source archive.
 
