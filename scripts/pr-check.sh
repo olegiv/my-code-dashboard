@@ -8,8 +8,9 @@ tree="$(git write-tree)"
 check_dir="$(mktemp -d)"
 trap 'rm -rf "$check_dir"' EXIT
 # Check every indexed public file; never pass local runtime data to a scanner.
-# Submodule gitlinks are not files: they are never built or distributed.
-git ls-files -s | awk -F '\t' 'substr($1, 1, 6) != "160000" { print $2 }' > "$check_dir/index-files"
+# Submodule gitlinks are not files, and .claude/ symlinks only expose development
+# tools; neither is ever built or distributed.
+git ls-files -s | awk -F '\t' 'substr($1, 1, 6) != "160000" && !(substr($1, 1, 6) == "120000" && index($2, ".claude/") == 1) { print $2 }' > "$check_dir/index-files"
 git show :scripts/release-files.txt > "$check_dir/manifest"
 LC_ALL=C sort "$check_dir/index-files" > "$check_dir/index-sorted"
 LC_ALL=C sort "$check_dir/manifest" > "$check_dir/manifest-sorted"

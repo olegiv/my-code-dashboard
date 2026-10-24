@@ -38,7 +38,7 @@ Run `gofmt` on changed Go files. Use `httptest`, temporary directories, and synt
 - `internal/secret`, `internal/platform`: credentials, private paths, backups, and startup integration.
 - `internal/web`: handlers, embedded templates, browser assets, and UI tests.
 - `docs`, `scripts`, `.github`: operational guidance, packaging, release notice generation, and CI.
-- `.claude/shared`: the [Claude Code support tools](https://github.com/olegiv/claude-code-support-tools) submodule. It is development tooling only: never built, tested, packaged or distributed with the application.
+- `.claude/shared`: the [Claude Code support tools](https://github.com/olegiv/claude-code-support-tools) submodule. It is development tooling only: never built, tested, packaged or distributed with the application. Symlinks in `.claude/agents` and `.claude/commands` expose selected shared agents and commands to Claude Code.
 
 Show active findings by default and preserve native lifecycle/severity alongside normalized fields. Never equate unavailable data with security. Distinguish zero reported findings, disabled/unsupported scanners, missing analysis, denied access, collection failure, unknown coverage, and stale results.
 
