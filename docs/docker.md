@@ -22,7 +22,7 @@ Both use the same trust model (loopback only, no login, a trusted single-user ma
 
 Run only one installation against the same repositories: otherwise both refresh them and call the providers separately. Installations are independent, each with its own database, schedule and credentials.
 
-- **Docker to native:** run `docker compose stop dashboard` (the volume keeps its data), then `make build && ./bin/my-code-dashboard --open`. An existing native data directory continues where it left off; use **Refresh now** to catch up. To move the container's newer history instead, use **Download backup** in the container, stop both, and run `./bin/my-code-dashboard restore --archive <file>`. Then start the native app and reconnect each connection in **Connections**: select it, check its URL and enter its token. Finally enable **Install start at login** in Settings and quit the foreground app.
+- **Docker to native:** run `docker compose stop dashboard` (the volume keeps its data), then `make run`. An existing native data directory continues where it left off; use **Refresh now** to catch up. To move the container's newer history instead, use **Download backup** in the container, stop both, and run `./bin/my-code-dashboard restore --archive <file>`. Then start the native app and reconnect each connection in **Connections**: select it, check its URL and enter its token. Finally enable **Install start at login** in Settings and quit the foreground app.
 - **Native to Docker:** follow [restore a backup](#restore-a-backup-including-one-from-a-native-installation), then remove start at login in the native app's Settings and quit it.
 
 `docker compose down --volumes` deletes the container's data; download a backup first if you need its history.

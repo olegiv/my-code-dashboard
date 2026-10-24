@@ -27,7 +27,7 @@ The default demo uses synthetic data and a temporary database, accepts no creden
 ./bin/my-code-dashboard --open
 ```
 
-Open [http://127.0.0.1:7364](http://127.0.0.1:7364). In **Connections**, validate a read-only token, discover repositories, then save your monitoring selection in **Repositories**. Use **Refresh now** to import their existing reports. Tokens belong in the local GUI or a provisioned credential file, never in chat, command arguments, URLs, or source files.
+`make run` builds and starts it the same way; pass extra flags with `ARGS`, for example `make run ARGS="--addr 127.0.0.1:7366"`. `--open` opens [http://127.0.0.1:7364](http://127.0.0.1:7364) in your default browser. In **Connections**, validate a read-only token, discover repositories, then save your monitoring selection in **Repositories**. Use **Refresh now** to import their existing reports. Tokens belong in the local GUI or a provisioned credential file, never in chat, command arguments, URLs, or source files.
 
 The app imports reports. It does not run scanners, clone repositories, enable features, dismiss alerts, trigger pipelines, or modify providers. Daily synchronization is independent of the providers' scanning schedules.
 
