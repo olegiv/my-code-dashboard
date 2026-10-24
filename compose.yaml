@@ -1,0 +1,31 @@
+# Optional container deployment for a trusted single-user host. See docs/docker.md.
+# Host networking keeps the enforced loopback listener; never add published ports.
+name: my-code-dashboard
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        VERSION: 0.1.0-dev
+    image: my-code-dashboard:local
+    network_mode: host
+    command: ["serve", "--data-dir", "/data", "--addr", "${MCD_ADDR:-127.0.0.1:7364}"]
+    environment:
+      CREDENTIALS_DIRECTORY: /credentials
+    volumes:
+      - dashboard-data:/data
+      - type: bind
+        source: ${MCD_CREDENTIAL_DIR:?Set MCD_CREDENTIAL_DIR to a private credential directory outside the checkout}
+        target: /credentials
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 15s
+volumes:
+  dashboard-data:

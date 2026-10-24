@@ -1,7 +1,7 @@
-.PHONY: build demo test lint check test-gate commit-check pr-check package-check install-test-gate release
+.PHONY: build demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check
 
 # Keep TLS behavior consistent across local, CI, and release builds.
-export GOTOOLCHAIN := go1.26.9
+export GOTOOLCHAIN := go1.26.10
 
 build:
 	go build -trimpath -buildvcs=false -o bin/my-code-dashboard ./cmd/my-code-dashboard
@@ -37,3 +37,9 @@ install-test-gate:
 
 release:
 	bash scripts/release.sh 0.1.0-dev
+
+docker-build:
+	docker build --build-arg VERSION=0.1.0-dev --tag my-code-dashboard:local .
+
+docker-check:
+	bash scripts/docker-check.sh

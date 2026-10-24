@@ -1,0 +1,14 @@
+# Send only image build inputs: never runtime data, credentials, backups or local artifacts.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!scripts/notices/
+!scripts/release-files.txt
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+**/*.db
+**/*.db-*
+**/*.sqlite*
+**/.DS_Store

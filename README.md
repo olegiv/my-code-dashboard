@@ -8,7 +8,7 @@ One local dashboard for existing security reports, coverage, refresh health, and
 
 ## Run it
 
-Go **1.26.9** is the minimum supported compiler and the pinned, security-patched build toolchain. Make targets and the release script select this version even when a newer Go is installed; Go downloads it if needed. The binary needs no Go installation at runtime.
+Go **1.26.10** is the minimum supported compiler and the pinned, security-patched build toolchain. Make targets and the release script select this version even when a newer Go is installed; Go downloads it if needed. The binary needs no Go installation at runtime.
 
 ```sh
 make build
@@ -53,7 +53,7 @@ macOS data defaults to `~/Library/Application Support/My Code Dashboard`; Linux 
 
 In **Settings**, install start at login to keep a per-user macOS agent running while logged in. It copies the binary into the private data directory. Stop the foreground process after installation so the agent can take over. A sleeping, powered-off, or logged-out Mac cannot refresh; the next start/wake performs one catch-up for the most recent due day. Removing start at login takes effect at logout; the current agent keeps running for that login session.
 
-Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
+Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. An optional [container image](docs/docker.md) packages the headless Linux setup with host networking. Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
 
 ## Development
 
@@ -69,7 +69,7 @@ PR validation also checks shell scripts, workflows, secrets, cross-target packag
 
 Coding agents should read [AGENTS.md](AGENTS.md); [CLAUDE.md](CLAUDE.md) points Claude Code to the same project instructions.
 
-For direct Go commands, set `GOTOOLCHAIN=go1.26.9` or select that SDK in your IDE. The minimum version in `go.mod` rejects older compilers but does not force a newer installed Go to use an older compiler. Go 1.27 has reproduced TLS handshake timeouts against a self-managed GitLab endpoint; the pinned 1.26.9 build connects with TLS 1.3 and certificate verification enabled. See [why Go 1.26.9, why Go 1.17 cannot build this project, and how to revisit the 1.27 pin](docs/go-toolchain.md), plus [connection troubleshooting](docs/operations.md#provider-connection-troubleshooting).
+For direct Go commands, set `GOTOOLCHAIN=go1.26.10` or select that SDK in your IDE. The minimum version in `go.mod` rejects older compilers but does not force a newer installed Go to use an older compiler. Go 1.27 has reproduced TLS handshake timeouts against a self-managed GitLab endpoint; a 1.26.9 build connected with TLS 1.3 and certificate verification enabled, and the pin now selects the 1.26.10 `crypto/x509` security patch. See [why Go 1.26.10, why Go 1.17 cannot build this project, and how to revisit the 1.27 pin](docs/go-toolchain.md), plus [connection troubleshooting](docs/operations.md#provider-connection-troubleshooting).
 
 Build distribution archives without publishing:
 

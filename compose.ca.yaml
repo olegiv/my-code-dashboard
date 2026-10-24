@@ -1,0 +1,12 @@
+# Optional overlay that trusts a corporate certificate authority. See docs/docker.md.
+# Use with COMPOSE_FILE=compose.yaml:compose.ca.yaml. Public roots stay trusted:
+# Go still loads the image's CA bundle and adds every PEM certificate found here.
+services:
+  dashboard:
+    environment:
+      SSL_CERT_DIR: /etc/ssl/certs:/corporate-ca
+    volumes:
+      - type: bind
+        source: ${MCD_CA_DIR:?Set MCD_CA_DIR to a directory of PEM CA certificates outside the checkout}
+        target: /corporate-ca
+        read_only: true
