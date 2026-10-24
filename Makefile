@@ -43,16 +43,16 @@ pr-check: ## Check the staged files: manifest, ShellCheck, actionlint, Gitleaks
 	bash scripts/pr-check.sh
 
 package-check: release ## Build and verify the release archives
-	go run ./scripts/packagecheck -version 0.2.0-dev
+	go run ./scripts/packagecheck -version 0.3.0-dev
 
 install-test-gate: ## Install the repository pre-push hook
 	bash scripts/install-test-gate.sh
 
 release: ## Prepare release archives in dist/ (publishes nothing)
-	bash scripts/release.sh 0.2.0-dev
+	bash scripts/release.sh 0.3.0-dev
 
 docker-build: ## Build the my-code-dashboard:local image
-	docker build --build-arg VERSION=0.2.0-dev --build-arg COMMIT=$(COMMIT) --tag my-code-dashboard:local .
+	docker build --build-arg VERSION=0.3.0-dev --build-arg COMMIT=$(COMMIT) --tag my-code-dashboard:local .
 
 docker-check: ## Build and smoke-test the container image (requires Docker)
 	bash scripts/docker-check.sh

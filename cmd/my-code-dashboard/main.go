@@ -31,7 +31,7 @@ import (
 	"github.com/olegiv/my-code-dashboard/internal/web"
 )
 
-var version = "0.2.0-dev"
+var version = "0.3.0-dev"
 
 // commit identifies the source of a development build; the Makefile sets it.
 var commit = ""
