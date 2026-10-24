@@ -76,6 +76,39 @@ func TestPRChecks(t *testing.T) {
 			t.Fatal("tools ran before manifest validation")
 		}
 	})
+	t.Run("submodule gitlinks need no manifest entry", func(t *testing.T) {
+		f := prFixture(t)
+		f.must(t, "", "git", "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("a", 40)+",tools/shared")
+		out := f.must(t, "", "bash", "scripts/pr-check.sh")
+		trace, err := os.ReadFile(filepath.Join(f.dir, "trace"))
+		if err != nil || len(strings.Split(strings.TrimSpace(string(trace)), "\n")) != 3 || !strings.Contains(out, "PR checks passed for staged tree") {
+			t.Fatalf("gitlink blocked PR checks: %v\n%s\n%s", err, out, trace)
+		}
+	})
+	t.Run(".claude symlinks need no manifest entry", func(t *testing.T) {
+		f := prFixture(t)
+		link := filepath.Join(f.dir, ".claude", "commands", "tool.md")
+		if err := os.MkdirAll(filepath.Dir(link), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../shared/tool.md", link); err != nil {
+			t.Fatal(err)
+		}
+		f.must(t, "", "git", "add", ".claude")
+		if out, err := f.command("", "bash", "scripts/pr-check.sh"); err != nil || !strings.Contains(out, "PR checks passed for staged tree") {
+			t.Fatalf(".claude symlink blocked PR checks: %v\n%s", err, out)
+		}
+	})
+	t.Run("symlinks elsewhere still need a manifest entry", func(t *testing.T) {
+		f := prFixture(t)
+		if err := os.Symlink("marker", filepath.Join(f.dir, "linked")); err != nil {
+			t.Fatal(err)
+		}
+		f.must(t, "", "git", "add", "linked")
+		if out, err := f.command("", "bash", "scripts/pr-check.sh"); err == nil || !strings.Contains(out, "manifest must list every indexed file") {
+			t.Fatalf("unlisted symlink accepted: %v\n%s", err, out)
+		}
+	})
 	t.Run("index changes invalidate passing tools", func(t *testing.T) {
 		f := prFixture(t)
 		f.env = append(f.env, "CHANGE_INDEX=1")

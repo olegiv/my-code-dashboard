@@ -9,6 +9,7 @@
 .github/workflows/quality.yml
 .github/workflows/release.yml
 .gitignore
+.gitmodules
 .golangci.yml
 AGENTS.md
 CLAUDE.md
