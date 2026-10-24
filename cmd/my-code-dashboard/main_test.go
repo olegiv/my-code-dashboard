@@ -28,6 +28,19 @@ func TestVersionHelpAndUnsafeListener(t *testing.T) {
 	if err := run([]string{"--help"}, &out); err != nil || !strings.Contains(out.String(), "-demo") {
 		t.Fatal("help command failed")
 	}
+	for _, command := range []string{"serve", "backup", "restore", "connection", "service", "version"} {
+		if !strings.Contains(out.String(), "\n  "+command+" ") {
+			t.Fatalf("help does not list the %s command:\n%s", command, out.String())
+		}
+	}
+	saved := commit
+	commit = "abc1234-dirty"
+	out.Reset()
+	err := run([]string{"--version"}, &out)
+	commit = saved
+	if err != nil || out.String() != version+"+abc1234-dirty\n" {
+		t.Fatalf("development build version = %q", out.String())
+	}
 	for _, addr := range []string{"0.0.0.0:7364", ":7364", "192.0.2.1:7364"} {
 		if err := run([]string{"serve", "--data-dir", filepath.Join(t.TempDir(), "data"), "--addr", addr}, &out); err == nil {
 			t.Fatalf("public listener %s allowed", addr)

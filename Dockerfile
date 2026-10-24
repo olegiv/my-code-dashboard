@@ -12,10 +12,11 @@ RUN cd /context \
     && grep -E '^(cmd|internal|scripts/notices)/|^(LICENSE|THIRD_PARTY_NOTICES\.md)$' scripts/release-files.txt \
       | xargs cp --parents -t /src --
 ARG VERSION=0.2.0-dev
+ARG COMMIT=
 ARG TARGETOS
 ARG TARGETARCH
 RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -buildvcs=false \
-      -ldflags "-s -w -X main.version=$VERSION" -o /out/my-code-dashboard ./cmd/my-code-dashboard \
+      -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT" -o /out/my-code-dashboard ./cmd/my-code-dashboard \
     && go run ./scripts/notices -binary /out/my-code-dashboard > /out/THIRD_PARTY_LICENSES.txt \
     && install -d -m 0700 /out/data
 

@@ -2,6 +2,31 @@
 
 Docker is optional. The native binary remains the primary distribution and needs no container runtime. The image packages the [headless Linux deployment](operations.md#headless-debianubuntu) for a trusted single-user host and does not change the trust model in [the security policy](../SECURITY.md): there is no application login, and every local account and process that can reach the loopback listener can read dashboard data and download backups. This project builds the image locally and does not publish it.
 
+## Native or Docker
+
+On macOS, prefer the native app. The container packages the headless Linux deployment; on a Mac it adds Docker Desktop's VM and gives up the app's macOS integration:
+
+| | Native app | Docker on macOS |
+| --- | --- | --- |
+| Credentials | macOS Keychain; add and replace tokens in **Connections** | Private token files on disk; changed outside the app, then validated with the `connection` command |
+| Corporate CA | macOS trust store | Export and mount the CA ([corporate certificate authority](#corporate-certificate-authority)) |
+| Start at login | **Install start at login** in Settings (per-user LaunchAgent) | Docker Desktop must be running; `restart: unless-stopped` restarts the service |
+| Resources | One process | Docker Desktop's Linux VM keeps running |
+| Networking | Loopback | Requires Docker Desktop host networking |
+| Data and backups | `~/Library/Application Support/My Code Dashboard`, included in Time Machine unless excluded | A named volume inside Docker Desktop's disk image, which Time Machine usually does not back up (check with `tmutil isexcluded <path>`); use **Download backup** |
+| Isolation | Ordinary user process | Read-only root filesystem, no capabilities, `no-new-privileges` |
+
+Both use the same trust model (loopback only, no login, a trusted single-user machine), and neither refreshes while the Mac sleeps. Use the container on a headless Linux host, or on a Mac when you specifically want its isolation or the same setup as a Linux server. After a toolchain change, validate the build you actually run against your providers; see [the toolchain decision](go-toolchain.md).
+
+### Switching between them
+
+Run only one installation against the same repositories: otherwise both refresh them and call the providers separately. Installations are independent, each with its own database, schedule and credentials.
+
+- **Docker to native:** run `docker compose stop dashboard` (the volume keeps its data), then `make run`. An existing native data directory continues where it left off; use **Refresh now** to catch up. To move the container's newer history instead, use **Download backup** in the container, stop both, and run `./bin/my-code-dashboard restore --archive <file>`. Then start the native app and reconnect each connection in **Connections**: select it, check its URL and enter its token. Finally enable **Install start at login** in Settings and quit the foreground app.
+- **Native to Docker:** stop the native app first. If it runs at login, run `./bin/my-code-dashboard service --action remove`, which removes and unloads the agent; removing it in Settings only takes effect at logout. Otherwise quit it. Then follow [restore a backup](#restore-a-backup-including-one-from-a-native-installation).
+
+`docker compose down --volumes` deletes the container's data; download a backup first if you need its history.
+
 ## Networking
 
 The app accepts only loopback listeners and loopback Host headers, so Docker port publishing (`-p`, `ports:`) cannot reach it. The container uses host networking instead: the dashboard listens on the host's `127.0.0.1:7364`, the same address and exposure as the native binary. Do not add published ports, a `0.0.0.0` address or a reverse proxy. Public listeners are rejected, and exposing the app needs a separately designed access boundary.
@@ -99,7 +124,7 @@ Run these commands from the project checkout. Paths under `~/.config/my-code-das
     docker compose logs dashboard
     ```
 
-    The log shows `Local: http://127.0.0.1:7365`, or port 7364 without `MCD_ADDR`.
+    The log shows `Local: http://127.0.0.1:7365`, or port 7364 without `MCD_ADDR`. Alternatively, `make docker-up` starts the service, waits until it answers and opens it in your default browser.
 
 11. **Finish in the browser.** Open that address.
     - In **Repositories**, discover your repositories and save the ones to monitor.
@@ -117,7 +142,7 @@ docker run --rm --network host my-code-dashboard:local serve --demo
 
 Open [http://127.0.0.1:7364](http://127.0.0.1:7364). The demo uses synthetic data in a temporary directory inside the container, accepts no credentials and makes no provider API calls. Exit with Ctrl+C.
 
-Like the release archives, the build compiles only files listed in [the public manifest](../scripts/release-files.txt); add a new source or asset file there before building the image. The build stage uses the pinned Go 1.26.10 image and the release archives' flags: CGO disabled, `-trimpath`, no VCS stamping and the `0.2.0-dev` version unless `VERSION` is overridden. Base images are pinned by digest. The runtime image is distroless `static` with the nonroot user (UID 65532) and no shell. `--open` is unavailable; open the printed URL yourself.
+Like the release archives, the build compiles only files listed in [the public manifest](../scripts/release-files.txt); add a new source or asset file there before building the image. `make docker-build` also stamps the current commit into the version (`docker compose run --rm dashboard version`); `docker compose build` does not. The build stage uses the pinned Go 1.26.10 image and the release archives' flags: CGO disabled, `-trimpath`, no VCS stamping and the `0.2.0-dev` version unless `VERSION` is overridden. Base images are pinned by digest. The runtime image is distroless `static` with the nonroot user (UID 65532) and no shell. `--open` is unavailable inside the container; `make docker-up` starts the Compose service and opens the dashboard in your default browser instead.
 
 `/usr/share/doc/my-code-dashboard/` in the image contains `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `THIRD_PARTY_LICENSES.txt` generated from the image's executable, as in the release archives. The base image's Debian package notices remain under `/usr/share/doc`. If you distribute an image, also provide its corresponding source, for example the release script's source archive.
 
@@ -260,7 +285,7 @@ docker compose up -d
 
 6. Start the service with `docker compose up -d`. Restored findings and history are visible immediately. In **Connections**, every connection should show **Connected** and none should ask you to reconnect. Then use **Refresh now**.
 
-Token files under other names, for example ones created before the restore, are unused afterwards; delete them. When you move from a native installation, stop it, and remove its start at login in its Settings, unless you mean to keep both. Otherwise both installations refresh the same repositories and call the providers separately. Restore keeps the replaced database in a private `before-restore-*` directory inside the volume. See [backup and restore](operations.md#backup-and-restore) for the validation and recovery rules.
+Token files under other names, for example ones created before the restore, are unused afterwards; delete them. When you move from a native installation, stop it before step 1, unless you mean to keep both: run `./bin/my-code-dashboard service --action remove` if it runs at login (removing it in Settings only takes effect at logout), otherwise quit it. Otherwise both installations refresh the same repositories and call the providers separately. Restore keeps the replaced database in a private `before-restore-*` directory inside the volume. See [backup and restore](operations.md#backup-and-restore) for the validation and recovery rules.
 
 To update, back up first, update the checkout, then run `docker compose up -d --build`. The data volume persists across rebuilds and `docker compose down`. `docker compose down --volumes` permanently deletes the installation's data.
 

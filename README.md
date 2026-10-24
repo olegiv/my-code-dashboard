@@ -2,6 +2,12 @@
 
 Self-hosted security dashboard for GitHub and GitLab repositories, built with Go, HTMX, and Alpine.js.
 
+[![Go checks](https://github.com/olegiv/my-code-dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/olegiv/my-code-dashboard/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/olegiv/my-code-dashboard/actions/workflows/codeql.yml/badge.svg)](https://github.com/olegiv/my-code-dashboard/actions/workflows/codeql.yml)
+[![Latest release](https://img.shields.io/github/v/release/olegiv/my-code-dashboard)](https://github.com/olegiv/my-code-dashboard/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/olegiv/my-code-dashboard?logo=go)](go.mod)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 One local dashboard for existing security reports, coverage, refresh health, and changes. Runs as a native binary with embedded browser assets and SQLite. No Node.js, npm, CDN, AI service, Docker, or C compiler is required.
 
 **Run v1 only on a trusted single-user machine.** There is no application login: other local accounts and processes can access the loopback dashboard and download backups. Loopback binding and CSRF checks do not authenticate local clients. Authentication is deferred; shared-host and internet-facing deployment are unsupported. See [the security policy](SECURITY.md).
@@ -21,7 +27,7 @@ The default demo uses synthetic data and a temporary database, accepts no creden
 ./bin/my-code-dashboard --open
 ```
 
-Open [http://127.0.0.1:7364](http://127.0.0.1:7364). In **Connections**, validate a read-only token, discover repositories, then save your monitoring selection in **Repositories**. Use **Refresh now** to import their existing reports. Tokens belong in the local GUI or a provisioned credential file, never in chat, command arguments, URLs, or source files.
+`make run` builds and starts it the same way; pass extra flags with `ARGS`, for example `make run ARGS="--addr 127.0.0.1:7366"`. `--open` opens [http://127.0.0.1:7364](http://127.0.0.1:7364) in your default browser. In **Connections**, validate a read-only token, discover repositories, then save your monitoring selection in **Repositories**. Use **Refresh now** to import their existing reports. Tokens belong in the local GUI or a provisioned credential file, never in chat, command arguments, URLs, or source files.
 
 The app imports reports. It does not run scanners, clone repositories, enable features, dismiss alerts, trigger pipelines, or modify providers. Daily synchronization is independent of the providers' scanning schedules.
 
@@ -53,13 +59,15 @@ macOS data defaults to `~/Library/Application Support/My Code Dashboard`; Linux 
 
 In **Settings**, install start at login to keep a per-user macOS agent running while logged in. It copies the binary into the private data directory. Stop the foreground process after installation so the agent can take over. A sleeping, powered-off, or logged-out Mac cannot refresh; the next start/wake performs one catch-up for the most recent due day. Removing start at login takes effect at logout; the current agent keeps running for that login session.
 
-Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. An optional [container image](docs/docker.md) packages the headless Linux setup with host networking. Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
+Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. An optional [container image](docs/docker.md) packages the headless Linux setup with host networking; on macOS, prefer the native app (see [native or Docker](docs/docker.md#native-or-docker)). Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
 
 ## Development
 
 ```sh
 make check
 ```
+
+Run `make` (or `make help`) to list every target. `./bin/my-code-dashboard version` prints the version, and `--help` lists the commands and flags. Builds from `make` append the commit, such as `0.2.0-dev+5284da1`, plus `-dirty` when tracked files have uncommitted changes; release archives print the plain release version.
 
 Tests use synthetic fixtures and local HTTP servers. They do not contact real providers or write to Keychain/LaunchAgents. Browser assets are pinned and vendored; edit plain CSS and JavaScript directly. The Alpine CSP build works with the strict Content Security Policy without `unsafe-eval`. See [architecture](docs/architecture.md), [contribution guidance](CONTRIBUTING.md), and [validation](docs/validation.md).
 
