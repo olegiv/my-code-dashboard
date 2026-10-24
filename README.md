@@ -67,6 +67,8 @@ Backups include private report data and provider configuration but exclude crede
 make check
 ```
 
+Run `make` (or `make help`) to list every target.
+
 Tests use synthetic fixtures and local HTTP servers. They do not contact real providers or write to Keychain/LaunchAgents. Browser assets are pinned and vendored; edit plain CSS and JavaScript directly. The Alpine CSP build works with the strict Content Security Policy without `unsafe-eval`. See [architecture](docs/architecture.md), [contribution guidance](CONTRIBUTING.md), and [validation](docs/validation.md).
 
 The workflow adapted from ocms-go adds uncached race tests, golangci-lint, vulnerability checks, an exact staged-file check (`make commit-check`), and a pre-push guard (`make install-test-gate`). See [testing and Codex/Codex Security review](docs/testing.md) for the initial-commit requirements and the separate GitHub CI/PR checks.
