@@ -23,7 +23,7 @@ Both use the same trust model (loopback only, no login, a trusted single-user ma
 Run only one installation against the same repositories: otherwise both refresh them and call the providers separately. Installations are independent, each with its own database, schedule and credentials.
 
 - **Docker to native:** run `docker compose stop dashboard` (the volume keeps its data), then `make run`. An existing native data directory continues where it left off; use **Refresh now** to catch up. To move the container's newer history instead, use **Download backup** in the container, stop both, and run `./bin/my-code-dashboard restore --archive <file>`. Then start the native app and reconnect each connection in **Connections**: select it, check its URL and enter its token. Finally enable **Install start at login** in Settings and quit the foreground app.
-- **Native to Docker:** follow [restore a backup](#restore-a-backup-including-one-from-a-native-installation), then remove start at login in the native app's Settings and quit it.
+- **Native to Docker:** stop the native app first. If it runs at login, run `./bin/my-code-dashboard service --action remove`, which removes and unloads the agent; removing it in Settings only takes effect at logout. Otherwise quit it. Then follow [restore a backup](#restore-a-backup-including-one-from-a-native-installation).
 
 `docker compose down --volumes` deletes the container's data; download a backup first if you need its history.
 
@@ -285,7 +285,7 @@ docker compose up -d
 
 6. Start the service with `docker compose up -d`. Restored findings and history are visible immediately. In **Connections**, every connection should show **Connected** and none should ask you to reconnect. Then use **Refresh now**.
 
-Token files under other names, for example ones created before the restore, are unused afterwards; delete them. When you move from a native installation, stop it, and remove its start at login in its Settings, unless you mean to keep both. Otherwise both installations refresh the same repositories and call the providers separately. Restore keeps the replaced database in a private `before-restore-*` directory inside the volume. See [backup and restore](operations.md#backup-and-restore) for the validation and recovery rules.
+Token files under other names, for example ones created before the restore, are unused afterwards; delete them. When you move from a native installation, stop it before step 1, unless you mean to keep both: run `./bin/my-code-dashboard service --action remove` if it runs at login (removing it in Settings only takes effect at logout), otherwise quit it. Otherwise both installations refresh the same repositories and call the providers separately. Restore keeps the replaced database in a private `before-restore-*` directory inside the volume. See [backup and restore](operations.md#backup-and-restore) for the validation and recovery rules.
 
 To update, back up first, update the checkout, then run `docker compose up -d --build`. The data volume persists across rebuilds and `docker compose down`. `docker compose down --volumes` permanently deletes the installation's data.
 

@@ -4,11 +4,18 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 docker compose up -d dashboard
-# The service prints its listener address; this follows a custom MCD_ADDR.
+# The service prints its listener address; this follows a custom MCD_ADDR. Read
+# only the current start's log: an earlier run's address may belong to another
+# server now, for example a native installation that took the port.
 url=""
 for _ in $(seq 60); do
-  url="$(docker compose logs --no-log-prefix dashboard 2>/dev/null |
-    grep -E -o 'http://(127\.[0-9.]+|\[::1\]):[0-9]+' | tail -n 1 || true)"
+  state="$(docker inspect --format '{{.State.Running}} {{.State.Restarting}} {{.State.StartedAt}}' \
+    "$(docker compose ps -q dashboard)" 2>/dev/null || true)"
+  url=""
+  if [[ $state == "true false "* ]]; then
+    url="$(docker compose logs --no-log-prefix --since "${state##* }" dashboard 2>/dev/null |
+      grep -E -o 'http://(127\.[0-9.]+|\[::1\]):[0-9]+' | tail -n 1 || true)"
+  fi
   if [[ -n $url ]] && curl --silent --output /dev/null --max-time 2 "$url/"; then
     break
   fi
