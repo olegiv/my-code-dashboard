@@ -8,7 +8,7 @@ One local dashboard for existing security reports, coverage, refresh health, and
 
 ## Run it
 
-Go **1.26.9** is the minimum supported compiler and the pinned, security-patched build toolchain. Make targets and the release script select this version even when a newer Go is installed; Go downloads it if needed. The binary needs no Go installation at runtime.
+Go **1.26.10** is the minimum supported compiler and the pinned, security-patched build toolchain. Make targets and the release script select this version even when a newer Go is installed; Go downloads it if needed. The binary needs no Go installation at runtime.
 
 ```sh
 make build
@@ -69,7 +69,7 @@ PR validation also checks shell scripts, workflows, secrets, cross-target packag
 
 Coding agents should read [AGENTS.md](AGENTS.md); [CLAUDE.md](CLAUDE.md) points Claude Code to the same project instructions.
 
-For direct Go commands, set `GOTOOLCHAIN=go1.26.9` or select that SDK in your IDE. The minimum version in `go.mod` rejects older compilers but does not force a newer installed Go to use an older compiler. Go 1.27 has reproduced TLS handshake timeouts against a self-managed GitLab endpoint; the pinned 1.26.9 build connects with TLS 1.3 and certificate verification enabled. See [why Go 1.26.9, why Go 1.17 cannot build this project, and how to revisit the 1.27 pin](docs/go-toolchain.md), plus [connection troubleshooting](docs/operations.md#provider-connection-troubleshooting).
+For direct Go commands, set `GOTOOLCHAIN=go1.26.10` or select that SDK in your IDE. The minimum version in `go.mod` rejects older compilers but does not force a newer installed Go to use an older compiler. Go 1.27 has reproduced TLS handshake timeouts against a self-managed GitLab endpoint; a 1.26.9 build connected with TLS 1.3 and certificate verification enabled, and the pin now selects the 1.26.10 `crypto/x509` security patch. See [why Go 1.26.10, why Go 1.17 cannot build this project, and how to revisit the 1.27 pin](docs/go-toolchain.md), plus [connection troubleshooting](docs/operations.md#provider-connection-troubleshooting).
 
 Build distribution archives without publishing:
 

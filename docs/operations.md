@@ -4,7 +4,7 @@ Run v1 only on a trusted single-user machine, including a dedicated headless mac
 
 ## macOS
 
-Build with `make build`, which selects the security-patched Go 1.26.9 toolchain, then run `bin/my-code-dashboard --open`. The default address is `127.0.0.1:7364`; `--addr '[::1]:7364'` is available for IPv6. Public listeners are rejected. `--data-dir '/absolute/private/path'` selects another independent installation; use a different port too. Do not place runtime data in a source checkout.
+Build with `make build`, which selects the security-patched Go 1.26.10 toolchain, then run `bin/my-code-dashboard --open`. The default address is `127.0.0.1:7364`; `--addr '[::1]:7364'` is available for IPv6. Public listeners are rejected. `--data-dir '/absolute/private/path'` selects another independent installation; use a different port too. Do not place runtime data in a source checkout.
 
 `--open` starts the platform browser opener in the background. HTTP serving, scheduling and shutdown do not wait for the browser to exit. On Linux, `xdg-open` may stay attached to the browser; if opening fails, use the printed local URL.
 
@@ -38,7 +38,7 @@ Category collections with a last success more than 48 hours ago need attention e
 
 Reported provider analysis older than 48 hours also needs attention, even after a successful recent collection. Each category still counts once when analysis, collection or other coverage reasons overlap. Exactly 48 hours, future analysis timestamps and unreported analysis timestamps do not add a staleness issue; unreported evidence retains its existing coverage status. The portfolio's **stale category collections** counter continues to count collection age only, while its attention total includes both collection and analysis freshness. Reading the dashboard does not change stored timestamps or trigger a provider scan.
 
-Use the project build commands so the binary uses Go 1.26.9, also the module's minimum compiler version. A reproduced TLS handshake timeout with Go 1.27 disappeared with 1.26.9 while retaining TLS 1.3 and system certificate verification. The compiler pin applies to Make targets, CI, and release archives. Direct commands and IDE builds must also select Go 1.26.9; the module minimum does not downgrade a newer compiler.
+Use the project build commands so the binary uses Go 1.26.10, also the module's minimum compiler version. A reproduced TLS handshake timeout with Go 1.27 disappeared with 1.26.9 while retaining TLS 1.3 and system certificate verification; 1.26.10 adds only `crypto/x509` security fixes to that patch line. The compiler pin applies to Make targets, CI, and release archives. Direct commands and IDE builds must also select Go 1.26.10; the module minimum does not downgrade a newer compiler.
 
 [Toolchain decision](go-toolchain.md) documents the support/security rationale, concrete incompatibility with Go 1.17, observed Go 1.27 behavior and its limits, exact pin enforcement, and the verification needed before an upgrade.
 

@@ -188,14 +188,14 @@ func checkBinary(binary, notices []byte, target, version string) error {
 	for _, setting := range info.Settings {
 		settings[setting.Key] = setting.Value
 	}
-	if info.GoVersion != "go1.26.9" || info.Path != "github.com/olegiv/my-code-dashboard/cmd/my-code-dashboard" || settings["CGO_ENABLED"] != "0" || settings["GOOS"]+"-"+settings["GOARCH"] != target {
+	if info.GoVersion != "go1.26.10" || info.Path != "github.com/olegiv/my-code-dashboard/cmd/my-code-dashboard" || settings["CGO_ENABLED"] != "0" || settings["GOOS"]+"-"+settings["GOARCH"] != target {
 		return fmt.Errorf("unexpected compiler, module, CGO or target metadata")
 	}
 	text := string(notices)
-	if !strings.Contains(text, "Target: "+strings.ReplaceAll(target, "-", "/")+"; go1.26.9") {
+	if !strings.Contains(text, "Target: "+strings.ReplaceAll(target, "-", "/")+"; go1.26.10") {
 		return fmt.Errorf("missing target-specific notices")
 	}
-	components := []string{"Go go1.26.9 / LICENSE", "Embedded browser assets / HTMX-LICENSE", "Embedded browser assets / ALPINE-LICENSE", "Embedded browser assets / VUE-LICENSE"}
+	components := []string{"Go go1.26.10 / LICENSE", "Embedded browser assets / HTMX-LICENSE", "Embedded browser assets / ALPINE-LICENSE", "Embedded browser assets / VUE-LICENSE"}
 	for _, dep := range info.Deps {
 		components = append(components, dep.Path+"@"+dep.Version+" / ")
 	}

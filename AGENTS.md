@@ -11,7 +11,7 @@ My Code Dashboard is maintained by Oleg Ivanchenko. The GitHub owner is `olegiv`
 
 ## Commands
 
-Use **Go 1.26.9**, also the module's minimum compiler version. Make targets and the release script select it. Prefix direct Go commands with `GOTOOLCHAIN=go1.26.9`; the module minimum does not force a newer installed Go to use an older compiler. Keep the minimum and exact build selection consistent across `go.mod`, Makefile, workflows, release script, and documentation.
+Use **Go 1.26.10**, also the module's minimum compiler version. Make targets and the release script select it. Prefix direct Go commands with `GOTOOLCHAIN=go1.26.10`; the module minimum does not force a newer installed Go to use an older compiler. Keep the minimum and exact build selection consistent across `go.mod`, Makefile, workflows, release script, and documentation.
 
 Read [the toolchain decision](docs/go-toolchain.md) for the Go 1.17 incompatibilities, the observed Go 1.27 TLS issue, and the evidence needed to update the pin. Do not present the historical timeout as a diagnosed upstream bug.
 
@@ -57,7 +57,7 @@ Keep the daily 09:00 Europe/Zurich schedule DST-aware, persist catch-up/retry st
 
 Preserve GPL-3.0-only headers in original code and all upstream notices. Browser assets are pinned under `internal/web/assets/vendor`; use the Alpine CSP build. When updating assets, retain licenses, update recorded checksums/notices, and verify CSP and HTMX behavior in a browser. No frontend build pipeline is needed.
 
-For Go dependency changes, run `GOTOOLCHAIN=go1.26.9 go mod tidy` and the relevant checks. Keep SQLite and its libc dependency compatible. Review [CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packaging generates full notices for each binary's runtime components; keep those generated files in ignored distribution artifacts, with no checked-in license inventory or generated license directory.
+For Go dependency changes, run `GOTOOLCHAIN=go1.26.10 go mod tidy` and the relevant checks. Keep SQLite and its libc dependency compatible. Review [CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packaging generates full notices for each binary's runtime components; keep those generated files in ignored distribution artifacts, with no checked-in license inventory or generated license directory.
 
 `bash scripts/release.sh 0.1.0-dev` prepares local archives and corresponding source in ignored `dist/`; it does not publish. Update `scripts/release-files.txt` when adding intended public files; both builds and archives use only that manifest's temporary source tree. Preserve dependency source/notices, checksums, and exclusion of runtime data and macOS metadata. Include these agent instructions in source distributions.
 

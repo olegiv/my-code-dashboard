@@ -14,7 +14,7 @@ git checkout-index --all --prefix="$stage_dir/"
 echo "test-gate: checking staged tree $candidate_tree"
 (
   cd "$stage_dir"
-  GOTOOLCHAIN=go1.26.9 GOWORK=off make build check
+  GOTOOLCHAIN=go1.26.10 GOWORK=off make build check
 )
 if [[ $(git write-tree) != "$candidate_tree" ]]; then
   echo 'test-gate: staged files changed during checks; rerun before committing.' >&2

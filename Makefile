@@ -1,7 +1,7 @@
 .PHONY: build demo test lint check test-gate commit-check pr-check package-check install-test-gate release
 
 # Keep TLS behavior consistent across local, CI, and release builds.
-export GOTOOLCHAIN := go1.26.9
+export GOTOOLCHAIN := go1.26.10
 
 build:
 	go build -trimpath -buildvcs=false -o bin/my-code-dashboard ./cmd/my-code-dashboard

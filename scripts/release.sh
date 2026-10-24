@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
-export GOTOOLCHAIN=go1.26.9
+export GOTOOLCHAIN=go1.26.10
 # Keep macOS AppleDouble files and extended attributes out of public archives.
 export COPYFILE_DISABLE=1
 cd "$(dirname "$0")/.."

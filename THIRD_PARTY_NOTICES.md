@@ -4,7 +4,7 @@ Original application code is GPL-3.0-only. The components below retain their ori
 
 | Component | Version | License / retained notice |
 | --- | --- | --- |
-| Go standard library | Go 1.26.9 build toolchain | BSD-3-Clause |
+| Go standard library | Go 1.26.10 build toolchain | BSD-3-Clause |
 | modernc.org/sqlite | v1.60.1 | BSD-3-Clause; embedded SQLite public-domain code, sqlite-vec MIT, and other notices supplied by the module |
 | github.com/zalando/go-keyring | v0.2.8 | Apache-2.0 |
 | HTMX + Alpine compatibility extension | 4.0.0 | BSD-0-Clause; `internal/web/assets/vendor/HTMX-LICENSE` |

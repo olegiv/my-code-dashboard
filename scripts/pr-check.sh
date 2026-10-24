@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
-export GOTOOLCHAIN=go1.26.9
+export GOTOOLCHAIN=go1.26.10
 export GOWORK=off
 cd "$(git rev-parse --show-toplevel)"
 tree="$(git write-tree)"
