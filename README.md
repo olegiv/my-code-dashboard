@@ -53,7 +53,7 @@ macOS data defaults to `~/Library/Application Support/My Code Dashboard`; Linux 
 
 In **Settings**, install start at login to keep a per-user macOS agent running while logged in. It copies the binary into the private data directory. Stop the foreground process after installation so the agent can take over. A sleeping, powered-off, or logged-out Mac cannot refresh; the next start/wake performs one catch-up for the most recent due day. Removing start at login takes effect at logout; the current agent keeps running for that login session.
 
-Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
+Backups include private report data and provider configuration but exclude credentials. Store them privately. See [operations](docs/operations.md) for startup, update, backup, restore, headless Linux, and migration instructions. An optional [container image](docs/docker.md) packages the headless Linux setup with host networking. Loopback binding is enforced. Authentication and an internet-facing deployment are future work; a reverse proxy must not expose the app without an explicitly designed access boundary. Obtain permission before moving corporate reports to a personal server.
 
 ## Development
 

@@ -8,3 +8,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # The Go toolchain pin changes across every build file together; see docs/go-toolchain.md.
+      - dependency-name: golang

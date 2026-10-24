@@ -42,7 +42,7 @@ Use the project build commands so the binary uses Go 1.26.10, also the module's 
 
 [Toolchain decision](go-toolchain.md) documents the support/security rationale, concrete incompatibility with Go 1.17, observed Go 1.27 behavior and its limits, exact pin enforcement, and the verification needed before an upgrade.
 
-Connection timeouts and certificate verification failures have separate messages. For certificate failures, check the configured HTTPS hostname, certificate validity/chain, and OS trust store or corporate CA installation. For timeouts, check VPN/network reachability and the compiler used to build the executable (`go version -m bin/my-code-dashboard`). Provider authentication is checked after TLS succeeds. Credentials should be entered locally again after a failed validation; they are not saved by that failed attempt.
+Connection timeouts and certificate verification failures have separate messages. For certificate failures, check the configured HTTPS hostname, certificate validity/chain, and OS trust store or corporate CA installation. The container image does not use the host trust store; mount the CA as described in [corporate certificate authority](docker.md#corporate-certificate-authority). For timeouts, check VPN/network reachability and the compiler used to build the executable (`go version -m bin/my-code-dashboard`). Provider authentication is checked after TLS succeeds. Credentials should be entered locally again after a failed validation; they are not saved by that failed attempt.
 
 GitLab discovery treats hostname case and an explicit HTTPS port 443 as equivalent for repository identity. Rediscovery through either spelling retains the existing repository ID, selection, credential connection and report history. Different nondefault ports or installation subpaths remain separate instances. This comparison does not rewrite saved connection URLs or relax the matching recipient required when reconnecting a credential.
 
@@ -79,7 +79,7 @@ If moving the old files or installing the replacement fails, restore attempts to
 
 ## Headless Debian/Ubuntu
 
-Use the Linux binary and a directory of private externally provisioned credential files, preferably supplied by systemd `LoadCredential`. A desktop Linux session can instead use the OS Secret Service keyring. There is no automatic switch to plaintext when Secret Service is unavailable.
+Use the Linux binary and a directory of private externally provisioned credential files, preferably supplied by systemd `LoadCredential`. The optional [container image](docker.md) packages this setup with host networking and a mounted credential directory. A desktop Linux session can instead use the OS Secret Service keyring. There is no automatic switch to plaintext when Secret Service is unavailable.
 
 For a headless installation, provision a synthetic example filename such as `github-personal` in a directory readable only by the service account, mode 0600 per file and 0700 for its directory. Populate it through your secret manager/editor; no token is a CLI argument. While the app is stopped, register its connection metadata:
 

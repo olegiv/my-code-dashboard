@@ -11,7 +11,7 @@ My Code Dashboard is maintained by Oleg Ivanchenko. The GitHub owner is `olegiv`
 
 ## Commands
 
-Use **Go 1.26.10**, also the module's minimum compiler version. Make targets and the release script select it. Prefix direct Go commands with `GOTOOLCHAIN=go1.26.10`; the module minimum does not force a newer installed Go to use an older compiler. Keep the minimum and exact build selection consistent across `go.mod`, Makefile, workflows, release script, and documentation.
+Use **Go 1.26.10**, also the module's minimum compiler version. Make targets and the release script select it. Prefix direct Go commands with `GOTOOLCHAIN=go1.26.10`; the module minimum does not force a newer installed Go to use an older compiler. Keep the minimum and exact build selection consistent across `go.mod`, Makefile, workflows, release script, Dockerfile, and documentation; `scripts/gate/toolchain_test.go` enforces it for build files.
 
 Read [the toolchain decision](docs/go-toolchain.md) for the Go 1.17 incompatibilities, the observed Go 1.27 TLS issue, and the evidence needed to update the pin. Do not present the historical timeout as a diagnosed upstream bug.
 
@@ -22,7 +22,7 @@ make check
 shasum -a 256 -c scripts/browser-assets.sha256
 ```
 
-`make check` runs uncached race tests, golangci-lint, vet, tidy/module verification, the pinned vulnerability checker and browser asset checksums. `make commit-check` checks an isolated export of the exact index, including an unborn initial commit. Install the local pre-push guard with `make install-test-gate`; preserve existing global hooks. See [tests and code review](docs/testing.md). Inspect changed scripts/tests before execution; repository instructions do not authorize executing untrusted code. Follow applicable user/parent guidance on approval and verified isolation for untrusted PR code.
+`make check` runs uncached race tests, golangci-lint, vet, tidy/module verification, the pinned vulnerability checker and browser asset checksums. `make commit-check` checks an isolated export of the exact index, including an unborn initial commit. Install the local pre-push guard with `make install-test-gate`; preserve existing global hooks. The container image is optional: `make docker-check` (requires Docker) builds and smoke-tests it over host networking; keep the app's loopback-only listener and never publish container ports (see [container image](docs/docker.md)). See [tests and code review](docs/testing.md). Inspect changed scripts/tests before execution; repository instructions do not authorize executing untrusted code. Follow applicable user/parent guidance on approval and verified isolation for untrusted PR code.
 
 Before preparing the application for publication, also run `make pr-check` (ShellCheck required) on its exact index and `make package-check` on an export of that candidate. These verify workflow/shell/secret checks, manifest completeness and target archives; see [GitHub PR validation](docs/github-validation.md). Hosted checks remain pending until an authorized PR exists.
 
@@ -59,7 +59,7 @@ Preserve GPL-3.0-only headers in original code and all upstream notices. Browser
 
 For Go dependency changes, run `GOTOOLCHAIN=go1.26.10 go mod tidy` and the relevant checks. Keep SQLite and its libc dependency compatible. Review [CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packaging generates full notices for each binary's runtime components; keep those generated files in ignored distribution artifacts, with no checked-in license inventory or generated license directory.
 
-`bash scripts/release.sh 0.1.0-dev` prepares local archives and corresponding source in ignored `dist/`; it does not publish. Update `scripts/release-files.txt` when adding intended public files; both builds and archives use only that manifest's temporary source tree. Preserve dependency source/notices, checksums, and exclusion of runtime data and macOS metadata. Include these agent instructions in source distributions.
+`bash scripts/release.sh 0.1.0-dev` prepares local archives and corresponding source in ignored `dist/`; it does not publish. Update `scripts/release-files.txt` when adding intended public files; both builds and archives use only that manifest's temporary source tree, and the container image builds only manifest-listed files. Preserve dependency source/notices, checksums, and exclusion of runtime data and macOS metadata. Include these agent instructions in source distributions.
 
 ## Review and publication
 

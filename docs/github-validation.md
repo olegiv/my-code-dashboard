@@ -54,6 +54,7 @@ dispatch, except dependency review, which needs a PR comparison.
 | Dependency review / `dependency-review` | Compare introduced dependencies with the bootstrap base |
 | PR quality / `Workflow, shell and secret checks` | Complete public manifest, ShellCheck, actionlint v1.7.12 and Gitleaks v8.30.1 |
 | PR quality / `Package verification` | Four target archives, corresponding source, SHA-256 checksums, metadata, notices and native Linux version smoke test |
+| PR quality / `Container image` | Optional image build with Dockerfile checks, compiler metadata and notices, build-context allowlist, rejected public listener, synthetic credential-file and lock checks without network, corporate CA trust against a synthetic provider on an internal network, and host-network demo/volume smoke tests without credentials or pushing |
 | CodeQL / `CodeQL (go)` | Security-extended analysis with an explicit Go 1.26.10 build of every package |
 | CodeQL / `CodeQL (javascript-typescript)` | Browser JavaScript analysis without a frontend build |
 | CodeQL / `CodeQL (actions)` | Workflow security analysis |
