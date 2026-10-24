@@ -59,8 +59,9 @@ dispatch, except dependency review, which needs a PR comparison.
 | CodeQL / `CodeQL (javascript-typescript)` | Browser JavaScript analysis without a frontend build |
 | CodeQL / `CodeQL (actions)` | Workflow security analysis |
 
-CodeQL uses the pinned v4.39.0 action, with `security-events: write` limited to its
-job. Other jobs have read-only repository access and no application credentials.
+CodeQL uses a SHA-pinned v4 action; Dependabot updates its `init` and `analyze`
+steps together. `security-events: write` is limited to its job. Other jobs have
+read-only repository access and no application credentials.
 Checkouts do not retain Git credentials. There are no AI API keys in workflows.
 GitHub supplies the JavaScript runtime used internally by Actions; developers and
 the application still need no Node.js/npm installation.
