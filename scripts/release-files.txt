@@ -12,6 +12,7 @@
 .gitmodules
 .golangci.yml
 AGENTS.md
+CHANGELOG.md
 CLAUDE.md
 CONTRIBUTING.md
 Dockerfile

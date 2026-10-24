@@ -60,7 +60,7 @@ Preserve GPL-3.0-only headers in original code and all upstream notices. Browser
 
 For Go dependency changes, run `GOTOOLCHAIN=go1.26.10 go mod tidy` and the relevant checks. Keep SQLite and its libc dependency compatible. Review [CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packaging generates full notices for each binary's runtime components; keep those generated files in ignored distribution artifacts, with no checked-in license inventory or generated license directory.
 
-`bash scripts/release.sh 0.1.0-dev` prepares local archives and corresponding source in ignored `dist/`; it does not publish. Update `scripts/release-files.txt` when adding intended public files; both builds and archives use only that manifest's temporary source tree, and the container image builds only manifest-listed files. Preserve dependency source/notices, checksums, and exclusion of runtime data and macOS metadata. Include these agent instructions in source distributions.
+`bash scripts/release.sh 0.1.0-dev` prepares local archives and corresponding source in ignored `dist/`; it does not publish. Record release notes in `CHANGELOG.md` (Keep a Changelog). `/release-gh-prepare` drafts a GitHub release; only the maintainer publishes it, which creates the tag. Update `scripts/release-files.txt` when adding intended public files; both builds and archives use only that manifest's temporary source tree, and the container image builds only manifest-listed files. Preserve dependency source/notices, checksums, and exclusion of runtime data and macOS metadata. Include these agent instructions in source distributions.
 
 ## Review and publication
 
