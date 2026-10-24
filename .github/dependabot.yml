@@ -8,6 +8,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # CodeQL rejects workflows whose init and analyze steps differ in version.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
   - package-ecosystem: docker
     directory: /
     schedule:
