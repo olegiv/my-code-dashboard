@@ -67,7 +67,7 @@ Backups include private report data and provider configuration but exclude crede
 make check
 ```
 
-Run `make` (or `make help`) to list every target. `./bin/my-code-dashboard version` prints the version, and `--help` lists the commands and flags. Builds from `make` append the commit, such as `0.2.0-dev+5284da1`, plus `-dirty` when tracked files have uncommitted changes; release archives print the plain release version.
+Run `make` (or `make help`) to list every target. `./bin/my-code-dashboard version` prints the version, and `--help` lists the commands and flags. Builds from `make` append the commit, such as `0.3.0-dev+5284da1`, plus `-dirty` when tracked files have uncommitted changes; release archives print the plain release version.
 
 Tests use synthetic fixtures and local HTTP servers. They do not contact real providers or write to Keychain/LaunchAgents. Browser assets are pinned and vendored; edit plain CSS and JavaScript directly. The Alpine CSP build works with the strict Content Security Policy without `unsafe-eval`. See [architecture](docs/architecture.md), [contribution guidance](CONTRIBUTING.md), and [validation](docs/validation.md).
 
@@ -82,7 +82,7 @@ For direct Go commands, set `GOTOOLCHAIN=go1.26.10` or select that SDK in your I
 Build distribution archives without publishing:
 
 ```sh
-bash scripts/release.sh 0.2.0-dev
+bash scripts/release.sh 0.3.0-dev
 ```
 
 This builds from the reviewed [public file manifest](scripts/release-files.txt) and prepares macOS/Linux arm64/amd64 archives and checksums under ignored `dist/`. Unlisted local files are excluded from both builds and archives. It never creates a Git tag or GitHub release. Release notes live in [CHANGELOG.md](CHANGELOG.md); a release is cut as a GitHub draft from `main`, and publishing the draft creates its tag. [Repository metadata and publication](docs/repository-creation.md) records the public repository and the publication workflow.

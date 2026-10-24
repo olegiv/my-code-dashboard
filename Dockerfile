@@ -11,7 +11,7 @@ COPY . /context
 RUN cd /context \
     && grep -E '^(cmd|internal|scripts/notices)/|^(LICENSE|THIRD_PARTY_NOTICES\.md)$' scripts/release-files.txt \
       | xargs cp --parents -t /src --
-ARG VERSION=0.2.0-dev
+ARG VERSION=0.3.0-dev
 ARG COMMIT=
 ARG TARGETOS
 ARG TARGETARCH
