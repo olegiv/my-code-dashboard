@@ -2,6 +2,31 @@
 
 Docker is optional. The native binary remains the primary distribution and needs no container runtime. The image packages the [headless Linux deployment](operations.md#headless-debianubuntu) for a trusted single-user host and does not change the trust model in [the security policy](../SECURITY.md): there is no application login, and every local account and process that can reach the loopback listener can read dashboard data and download backups. This project builds the image locally and does not publish it.
 
+## Native or Docker
+
+On macOS, prefer the native app. The container packages the headless Linux deployment; on a Mac it adds Docker Desktop's VM and gives up the app's macOS integration:
+
+| | Native app | Docker on macOS |
+| --- | --- | --- |
+| Credentials | macOS Keychain; add and replace tokens in **Connections** | Private token files on disk; changed outside the app, then validated with the `connection` command |
+| Corporate CA | macOS trust store | Export and mount the CA ([corporate certificate authority](#corporate-certificate-authority)) |
+| Start at login | **Install start at login** in Settings (per-user LaunchAgent) | Docker Desktop must be running; `restart: unless-stopped` restarts the service |
+| Resources | One process | Docker Desktop's Linux VM keeps running |
+| Networking | Loopback | Requires Docker Desktop host networking |
+| Data and backups | `~/Library/Application Support/My Code Dashboard`, included in Time Machine unless excluded | A named volume inside Docker Desktop's disk image, which Time Machine usually does not back up (check with `tmutil isexcluded <path>`); use **Download backup** |
+| Isolation | Ordinary user process | Read-only root filesystem, no capabilities, `no-new-privileges` |
+
+Both use the same trust model (loopback only, no login, a trusted single-user machine), and neither refreshes while the Mac sleeps. Use the container on a headless Linux host, or on a Mac when you specifically want its isolation or the same setup as a Linux server. After a toolchain change, validate the build you actually run against your providers; see [the toolchain decision](go-toolchain.md).
+
+### Switching between them
+
+Run only one installation against the same repositories: otherwise both refresh them and call the providers separately. Installations are independent, each with its own database, schedule and credentials.
+
+- **Docker to native:** run `docker compose stop dashboard` (the volume keeps its data), then `make build && ./bin/my-code-dashboard --open`. An existing native data directory continues where it left off; use **Refresh now** to catch up. To move the container's newer history instead, use **Download backup** in the container, stop both, and run `./bin/my-code-dashboard restore --archive <file>`. Then start the native app and reconnect each connection in **Connections**: select it, check its URL and enter its token. Finally enable **Install start at login** in Settings and quit the foreground app.
+- **Native to Docker:** follow [restore a backup](#restore-a-backup-including-one-from-a-native-installation), then remove start at login in the native app's Settings and quit it.
+
+`docker compose down --volumes` deletes the container's data; download a backup first if you need its history.
+
 ## Networking
 
 The app accepts only loopback listeners and loopback Host headers, so Docker port publishing (`-p`, `ports:`) cannot reach it. The container uses host networking instead: the dashboard listens on the host's `127.0.0.1:7364`, the same address and exposure as the native binary. Do not add published ports, a `0.0.0.0` address or a reverse proxy. Public listeners are rejected, and exposing the app needs a separately designed access boundary.
