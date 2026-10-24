@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	version := flag.String("version", "0.1.0-dev", "archive version without v prefix")
+	version := flag.String("version", "0.2.0-dev", "archive version without v prefix")
 	flag.Parse()
 	if err := checkRelease(*version); err != nil {
 		fmt.Fprintln(os.Stderr, err)

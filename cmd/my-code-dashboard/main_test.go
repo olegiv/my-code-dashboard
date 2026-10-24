@@ -21,7 +21,7 @@ import (
 
 func TestVersionHelpAndUnsafeListener(t *testing.T) {
 	var out bytes.Buffer
-	if err := run([]string{"version"}, &out); err != nil || !strings.Contains(out.String(), "0.1.0") {
+	if err := run([]string{"version"}, &out); err != nil || out.String() != version+"\n" {
 		t.Fatal("version command failed")
 	}
 	out.Reset()

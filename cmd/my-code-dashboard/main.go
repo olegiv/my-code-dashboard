@@ -31,7 +31,7 @@ import (
 	"github.com/olegiv/my-code-dashboard/internal/web"
 )
 
-var version = "0.1.0-dev"
+var version = "0.2.0-dev"
 
 func main() {
 	syscall.Umask(0077)

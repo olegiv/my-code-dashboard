@@ -27,7 +27,7 @@ fail() {
 }
 
 docker build --check .
-docker build --build-arg VERSION=0.1.0-dev --tag "$image" .
+docker build --build-arg VERSION=0.2.0-dev --tag "$image" .
 # --env-file /dev/null and explicit -f keep a local .env or COMPOSE_FILE out of these checks.
 MCD_CREDENTIAL_DIR=/nonexistent docker compose --env-file /dev/null -f compose.yaml config --quiet
 

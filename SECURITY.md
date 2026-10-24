@@ -1,6 +1,6 @@
 # Security policy
 
-This is a local report aggregator for trusted single-user machines only. The current development series is supported through fixes on the default branch; there is no published stable release yet.
+This is a local report aggregator for trusted single-user machines only. v0.1.0 is the first published release. Fixes land on the default branch and ship in the next release; only the latest release is supported.
 
 ## Reporting
 

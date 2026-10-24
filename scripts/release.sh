@@ -5,7 +5,7 @@ export GOTOOLCHAIN=go1.26.10
 # Keep macOS AppleDouble files and extended attributes out of public archives.
 export COPYFILE_DISABLE=1
 cd "$(dirname "$0")/.."
-release_version="${1:-0.1.0-dev}"
+release_version="${1:-0.2.0-dev}"
 if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
   echo 'Expected a semantic version without the v prefix.' >&2
   exit 1
