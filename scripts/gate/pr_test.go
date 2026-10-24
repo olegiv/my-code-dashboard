@@ -76,6 +76,15 @@ func TestPRChecks(t *testing.T) {
 			t.Fatal("tools ran before manifest validation")
 		}
 	})
+	t.Run("submodule gitlinks need no manifest entry", func(t *testing.T) {
+		f := prFixture(t)
+		f.must(t, "", "git", "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("a", 40)+",tools/shared")
+		out := f.must(t, "", "bash", "scripts/pr-check.sh")
+		trace, err := os.ReadFile(filepath.Join(f.dir, "trace"))
+		if err != nil || len(strings.Split(strings.TrimSpace(string(trace)), "\n")) != 3 || !strings.Contains(out, "PR checks passed for staged tree") {
+			t.Fatalf("gitlink blocked PR checks: %v\n%s\n%s", err, out, trace)
+		}
+	})
 	t.Run("index changes invalidate passing tools", func(t *testing.T) {
 		f := prFixture(t)
 		f.env = append(f.env, "CHANGE_INDEX=1")
