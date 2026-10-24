@@ -33,6 +33,30 @@ import (
 
 var version = "0.2.0-dev"
 
+// commit identifies the source of a development build; the Makefile sets it.
+var commit = ""
+
+// displayVersion appends a development build's commit as semver build metadata.
+func displayVersion() string {
+	if commit == "" {
+		return version
+	}
+	return version + "+" + commit
+}
+
+const usageHeader = `Usage: my-code-dashboard [command] [flags]
+
+Commands:
+  serve        Run the dashboard (default)
+  backup       Write a backup archive (--output) while the app is stopped
+  restore      Restore a backup archive (--archive) while the app is stopped
+  connection   Register a headless connection from a provisioned credential file
+  service      Install or remove the macOS start-at-login agent (--action)
+  version      Print the version
+
+Flags:
+`
+
 func main() {
 	syscall.Umask(0077)
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -47,7 +71,7 @@ func run(args []string, out io.Writer) error {
 		args = args[1:]
 	}
 	if command == "version" || (len(args) == 1 && args[0] == "--version") {
-		fmt.Fprintln(out, version)
+		fmt.Fprintln(out, displayVersion())
 		return nil
 	}
 	defaultDir, err := platform.DataDir()
@@ -56,6 +80,10 @@ func run(args []string, out io.Writer) error {
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(out)
+	flags.Usage = func() {
+		fmt.Fprint(out, usageHeader)
+		flags.PrintDefaults()
+	}
 	dir := flags.String("data-dir", defaultDir, "Private installation data directory")
 	addr := flags.String("addr", "127.0.0.1:7364", "Loopback address and port")
 	demo := flags.Bool("demo", false, "Use synthetic data, no credentials, and a temporary database")
@@ -169,7 +197,7 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		err = platform.Export(ctx, s, f, version)
+		err = platform.Export(ctx, s, f, displayVersion())
 		closeErr := f.Close()
 		if err != nil {
 			_ = os.Remove(*output)
@@ -238,7 +266,7 @@ func serve(ctx context.Context, cancel context.CancelFunc, s *store.Store, e *en
 		return err
 	}
 	actual := listener.Addr().String()
-	app, err := web.New(e, options.dataDir, actual, version)
+	app, err := web.New(e, options.dataDir, actual, displayVersion())
 	if err != nil {
 		listener.Close()
 		return err
@@ -246,7 +274,7 @@ func serve(ctx context.Context, cancel context.CancelFunc, s *store.Store, e *en
 	app.SecretFiles = options.secretFiles
 	server := &http.Server{Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
 	url := "http://" + actual
-	fmt.Fprintf(out, "My Code Dashboard %s\nLocal: %s\n", version, url)
+	fmt.Fprintf(out, "My Code Dashboard %s\nLocal: %s\n", displayVersion(), url)
 	if options.demo {
 		fmt.Fprintln(out, "Synthetic demo: no credentials or external API calls.")
 	}

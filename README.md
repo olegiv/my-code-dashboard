@@ -67,7 +67,7 @@ Backups include private report data and provider configuration but exclude crede
 make check
 ```
 
-Run `make` (or `make help`) to list every target.
+Run `make` (or `make help`) to list every target. `./bin/my-code-dashboard version` prints the version, and `--help` lists the commands and flags. Builds from `make` append the commit, such as `0.2.0-dev+5284da1`, plus `-dirty` when tracked files have uncommitted changes; release archives print the plain release version.
 
 Tests use synthetic fixtures and local HTTP servers. They do not contact real providers or write to Keychain/LaunchAgents. Browser assets are pinned and vendored; edit plain CSS and JavaScript directly. The Alpine CSP build works with the strict Content Security Policy without `unsafe-eval`. See [architecture](docs/architecture.md), [contribution guidance](CONTRIBUTING.md), and [validation](docs/validation.md).
 

@@ -3,6 +3,10 @@
 # Keep TLS behavior consistent across local, CI, and release builds.
 export GOTOOLCHAIN := go1.26.10
 
+# Development builds append the commit, plus -dirty for uncommitted tracked
+# changes; release builds and checkouts without Git print the plain version.
+COMMIT ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null)$(if $(shell git status --porcelain --untracked-files=no 2>/dev/null),-dirty)
+
 # Plain `make` lists the targets; each target documents itself with `## text`.
 .DEFAULT_GOAL := help
 
@@ -10,7 +14,7 @@ help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "; print "Usage: make <target>\n"} /^[a-zA-Z_ -]+:.*## / {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build bin/my-code-dashboard with the pinned Go toolchain
-	go build -trimpath -buildvcs=false -o bin/my-code-dashboard ./cmd/my-code-dashboard
+	go build -trimpath -buildvcs=false -ldflags "-X main.commit=$(COMMIT)" -o bin/my-code-dashboard ./cmd/my-code-dashboard
 
 run: build ## Build and start the dashboard, opening it in the browser (extra flags: ARGS=...)
 	./bin/my-code-dashboard --open $(ARGS)
@@ -48,7 +52,7 @@ release: ## Prepare release archives in dist/ (publishes nothing)
 	bash scripts/release.sh 0.2.0-dev
 
 docker-build: ## Build the my-code-dashboard:local image
-	docker build --build-arg VERSION=0.2.0-dev --tag my-code-dashboard:local .
+	docker build --build-arg VERSION=0.2.0-dev --build-arg COMMIT=$(COMMIT) --tag my-code-dashboard:local .
 
 docker-check: ## Build and smoke-test the container image (requires Docker)
 	bash scripts/docker-check.sh
