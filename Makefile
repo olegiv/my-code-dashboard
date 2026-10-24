@@ -30,16 +30,16 @@ pr-check:
 	bash scripts/pr-check.sh
 
 package-check: release
-	go run ./scripts/packagecheck -version 0.1.0-dev
+	go run ./scripts/packagecheck -version 0.2.0-dev
 
 install-test-gate:
 	bash scripts/install-test-gate.sh
 
 release:
-	bash scripts/release.sh 0.1.0-dev
+	bash scripts/release.sh 0.2.0-dev
 
 docker-build:
-	docker build --build-arg VERSION=0.1.0-dev --tag my-code-dashboard:local .
+	docker build --build-arg VERSION=0.2.0-dev --tag my-code-dashboard:local .
 
 docker-check:
 	bash scripts/docker-check.sh

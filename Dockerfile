@@ -11,7 +11,7 @@ COPY . /context
 RUN cd /context \
     && grep -E '^(cmd|internal|scripts/notices)/|^(LICENSE|THIRD_PARTY_NOTICES\.md)$' scripts/release-files.txt \
       | xargs cp --parents -t /src --
-ARG VERSION=0.1.0-dev
+ARG VERSION=0.2.0-dev
 ARG TARGETOS
 ARG TARGETARCH
 RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -buildvcs=false \
