@@ -2,6 +2,10 @@ module github.com/olegiv/my-code-dashboard
 
 go 1.26.10
 
+// Review evidence in the ignored output/ directory can include scratch Go
+// files; keep them out of ./... so tests, vet and govulncheck still load.
+ignore ./output
+
 require (
 	github.com/zalando/go-keyring v0.2.8
 	modernc.org/sqlite v1.61.0

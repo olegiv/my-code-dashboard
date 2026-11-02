@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Fixed
+
+- `make test`, `make check` and plain `go test ./...`, `go vet ./...` and `govulncheck ./...` no longer fail in a working checkout that keeps scratch Go files in the ignored `output/` directory. `go.mod` now ignores `./output`.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added
