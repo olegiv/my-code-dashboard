@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+
 package web
 
 import (
@@ -31,7 +32,12 @@ func appFixture(t *testing.T, demo bool) *Server {
 		t.Fatal(err)
 	}
 	e := engine.New(context.Background(), s, secret.NewMemory(), demo)
-	t.Cleanup(func() { e.Wait(); s.Close() })
+	t.Cleanup(func() {
+		e.Wait()
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	if demo {
 		if err = e.SeedDemo(); err != nil {
 			t.Fatal(err)
@@ -675,8 +681,11 @@ func TestFindingPaginationAndStaleEvidence(t *testing.T) {
 	}
 	req := httptest.NewRequest("GET", "http://127.0.0.1:7364/findings?repo="+url.QueryEscape(repo.ID)+"&category=code&native_state=DETECTED&page=3", nil)
 	v, err := app.view(req, "findings", "Findings")
-	if err != nil || v.FindingCount != 101 || v.PageCount != 3 || len(v.Findings) != 1 || v.Stale == 0 {
-		t.Fatalf("pagination/staleness: count=%d pages=%d rows=%d stale=%d err=%v", v.FindingCount, v.PageCount, len(v.Findings), v.Stale, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.FindingCount != 101 || v.PageCount != 3 || len(v.Findings) != 1 || v.Stale == 0 {
+		t.Fatalf("pagination/staleness: count=%d pages=%d rows=%d stale=%d", v.FindingCount, v.PageCount, len(v.Findings), v.Stale)
 	}
 	if !strings.Contains(v.PreviousURL, "native_state=DETECTED") || !strings.Contains(v.PreviousURL, "repo=") {
 		t.Fatal("pagination dropped filters")
@@ -691,19 +700,28 @@ func TestFindingPaginationAndStaleEvidence(t *testing.T) {
 	for _, page := range []string{"overview", "findings"} {
 		req = httptest.NewRequest("GET", "http://127.0.0.1:7364/findings?repo="+url.QueryEscape(repo.ID)+"&category=code", nil)
 		active, err := app.view(req, page, "Active findings")
-		if err != nil || active.State != "open" || active.FindingCount != 102 {
-			t.Fatalf("%s default view includes inactive findings: state=%s count=%d err=%v", page, active.State, active.FindingCount, err)
+		if err != nil {
+			t.Fatalf("%s view: %v", page, err)
+		}
+		if active.State != "open" || active.FindingCount != 102 {
+			t.Fatalf("%s default view includes inactive findings: state=%s count=%d", page, active.State, active.FindingCount)
 		}
 	}
 	req = httptest.NewRequest("GET", "http://127.0.0.1:7364/findings?repo="+url.QueryEscape(repo.ID)+"&category=code&state=all", nil)
 	all, err := app.view(req, "findings", "Findings")
-	if err != nil || all.State != "all" || all.FindingCount != 105 {
-		t.Fatalf("explicit all-status view lost history: state=%s count=%d err=%v", all.State, all.FindingCount, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.State != "all" || all.FindingCount != 105 {
+		t.Fatalf("explicit all-status view lost history: state=%s count=%d", all.State, all.FindingCount)
 	}
 	req = httptest.NewRequest("GET", "http://127.0.0.1:7364/repositories/view?id="+url.QueryEscape(repo.ID)+"&category=code", nil)
 	v, err = app.view(req, "repository", "Repository details")
-	if err != nil || v.State != "open" || v.FindingCount != 102 || v.PageCount != 3 {
-		t.Fatalf("repository active findings: state=%s count=%d pages=%d err=%v", v.State, v.FindingCount, v.PageCount, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.State != "open" || v.FindingCount != 102 || v.PageCount != 3 {
+		t.Fatalf("repository active findings: state=%s count=%d pages=%d", v.State, v.FindingCount, v.PageCount)
 	}
 	next, err := url.Parse(v.NextURL)
 	if err != nil || next.Query().Get("repo") != repo.ID || next.Query().Get("state") != "open" {

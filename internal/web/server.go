@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+
+// Package web renders the dashboard's escaped templates, handles its GUI
+// forms and serves the embedded browser assets.
 package web
 
 import (
@@ -179,7 +182,8 @@ func New(e *engine.Engine, dir, addr, version string) (*Server, error) {
 	s.mux.HandleFunc("GET /status", s.status)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintln(w, "ok")
+		// A failed write means the client is gone; there is nothing to report.
+		_, _ = fmt.Fprintln(w, "ok")
 	})
 	s.mux.HandleFunc("POST /refresh", s.refresh)
 	s.mux.HandleFunc("POST /connections", s.connect)
@@ -339,8 +343,8 @@ func (s *Server) view(r *http.Request, page, title string) (View, error) {
 			}
 		}
 		if page == "repository" && repo.ID == q.Get("id") {
-			copy := row
-			v.SelectedRepo = &copy
+			selected := row
+			v.SelectedRepo = &selected
 			v.Title = repo.Name
 			v.Repo = repo.ID
 			q.Set("repo", repo.ID)
@@ -541,14 +545,17 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not prepare backup", 500)
 		return
 	}
-	defer os.RemoveAll(dir)
+	// Best-effort cleanup after the response; the directory stays private (0700).
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "backup.tar.gz")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		http.Error(w, "Could not prepare backup", 500)
 		return
 	}
-	defer f.Close()
+	// The archive is read back and served from this file, so a close error
+	// after serving cannot change the response.
+	defer func() { _ = f.Close() }()
 	if err = platform.Export(r.Context(), s.Engine.Store, f, s.Version); err != nil {
 		http.Error(w, "Could not export backup", 500)
 		return
