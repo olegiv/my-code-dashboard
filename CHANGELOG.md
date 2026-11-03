@@ -12,6 +12,10 @@ All notable changes to this project are documented in this file. The format foll
 
 - `make test`, `make check` and plain `go test ./...`, `go vet ./...` and `govulncheck ./...` no longer fail in a working checkout that keeps scratch Go files in the ignored `output/` directory. `go.mod` now ignores `./output`.
 
+### Security
+
+- Saving a connection reads the token, provider, URL, name and connection ID only from the form body. Values in the URL query string are ignored, so tokens never travel in URLs and a link cannot choose the connection that receives a token.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added
