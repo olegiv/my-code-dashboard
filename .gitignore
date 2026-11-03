@@ -17,3 +17,4 @@ coverage.out
 application.lock
 .demo
 *.backup.tar.gz
+/.audit/

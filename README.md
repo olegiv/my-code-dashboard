@@ -29,6 +29,8 @@ The default demo uses synthetic data and a temporary database, accepts no creden
 
 `make run` builds and starts it the same way; pass extra flags with `ARGS`, for example `make run ARGS="--addr 127.0.0.1:7366"`. `--open` opens [http://127.0.0.1:7364](http://127.0.0.1:7364) in your default browser. In **Connections**, validate a read-only token, discover repositories, then save your monitoring selection in **Repositories**. Use **Refresh now** to import their existing reports. Tokens belong in the local GUI or a provisioned credential file, never in chat, command arguments, URLs, or source files.
 
+On macOS, `make start` builds it, starts it in the background and opens it. `make stop` stops it and `make status` reports whether it is running. Closing the Terminal window does not stop it. After rebuilding, run `make stop start` to switch to the new binary. `scripts/dashboard.sh start --open`, `stop` and `status` do the same without building, and also work through a symlink, for example `ln -s "$PWD/scripts/dashboard.sh" ~/bin/my-code-dashboard-ctl`. Set `MCD_ADDR` or `MCD_DATA_DIR` for another installation. See [background start and stop](docs/operations.md#background-start-and-stop).
+
 The app imports reports. It does not run scanners, clone repositories, enable features, dismiss alerts, trigger pipelines, or modify providers. Daily synchronization is independent of the providers' scanning schedules.
 
 ## What is included

@@ -12,6 +12,16 @@ HTTP Host validation accepts a loopback IP or `localhost` without an explicit po
 
 The default directory is `~/Library/Application Support/My Code Dashboard`, protected with mode 0700. SQLite is 0600; the executable sets umask 0077. Keychain services use a random persisted installation ID so installations do not share credentials. A locked/unavailable keychain produces a visible collection error without a plaintext fallback. A native macOS Keychain dialog may require your approval; enter credentials locally.
 
+### Background start and stop
+
+`make start` builds the binary and runs `scripts/dashboard.sh start --open`. The script starts `bin/my-code-dashboard serve` in the background with `nohup`, so closing the Terminal window does not stop it. It waits until `/healthz` answers, then prints the URL and process ID. Other `serve` flags, such as `--demo` or `--no-scheduler`, can follow `start`. Set the listener address with `MCD_ADDR` (a loopback IP and fixed port, default `127.0.0.1:7364`), the installation with `MCD_DATA_DIR` and the binary with `MCD_BIN`, not with `--addr` or `--data-dir`. Output is appended to `dashboard.log` in the data directory, after a line marking each start; the script refuses a symbolic link there. If startup fails, for example because another process holds the installation lock, the script prints the end of that log and exits with an error.
+
+`make stop` (`scripts/dashboard.sh stop`) sends SIGTERM to the dashboard listening on that address. It waits up to 30 seconds for the process to exit and release its lock, and never force-kills it. If another program holds the port, the script reports it and leaves it running. `make status` prints the state; `scripts/dashboard.sh status` also exits with 0 only when the dashboard answers. A background process does not survive logout or restart; use start at login for that.
+
+If launchd has a start-at-login agent loaded for the same address, the script controls it instead of starting a second process. This includes an agent removed in Settings, which stays loaded until logout. `start` runs `launchctl kickstart`. `stop` runs `launchctl bootout`, even when the agent is between restarts and nothing is listening, because KeepAlive would restart a killed agent. An installed agent then returns at the next login. Remove it in Settings or with `service --action remove`. The agent's log stays in `service.log`.
+
+### Start at login
+
 In Settings, **Install start at login** copies the running executable to the data directory's `bin/`, writes a per-user LaunchAgent, and bootstraps it without sudo. Exit the foreground process to release its installation lock. The agent retries while that lock is busy. It runs only in your login session and can resume collection after sleep. No claim is made that it can wake a sleeping Mac.
 
 The copied executable must finish writing, receive its executable mode, and close successfully before it replaces the installed binary. A failure at any of those steps aborts installation before the plist or agent is changed, retains the previous executable, and attempts to remove the temporary copy. This includes delayed write errors reported only when the file closes; free space or fix the destination filesystem before retrying.
