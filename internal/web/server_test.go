@@ -868,6 +868,56 @@ func TestConnectionFormsKeepIdentifiersOutOfMutationPaths(t *testing.T) {
 	}
 }
 
+func TestConnectReadsCredentialsOnlyFromPostBody(t *testing.T) {
+	const token = "SYNTHETIC_QUERY_TOKEN_NEVER_USED"
+	for _, tc := range []struct {
+		name        string
+		query, body url.Values
+	}{
+		{"token only in query", url.Values{"token": {token}}, url.Values{"name": {"Synthetic account"}, "provider": {"github"}, "base_url": {"https://github.com"}}},
+		{"whole submission in query", url.Values{"name": {"Synthetic account"}, "provider": {"github"}, "base_url": {"https://github.com"}, "token": {token}}, url.Values{}},
+		{"recipient only in query", url.Values{"provider": {"github"}, "base_url": {"https://github.com"}}, url.Values{"name": {"Synthetic account"}, "token": {token}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := appFixture(t, false)
+			app.Engine.Factory = func(model.Connection, string) (provider.Provider, error) {
+				t.Fatal("query-string values reached the provider factory")
+				return nil, nil
+			}
+			body := url.Values{"csrf": {app.csrf}}
+			for k, v := range tc.body {
+				body[k] = v
+			}
+			r := request(app, "POST", "/connections?"+tc.query.Encode(), body, nil)
+			if location := r.Header().Get("Location"); r.Code != 303 || !strings.Contains(location, "error=") || strings.Contains(location, token) {
+				t.Fatalf("query-string submission was not rejected: %d %q", r.Code, location)
+			}
+			if connections, _ := app.Engine.Store.Connections(); len(connections) != 0 {
+				t.Fatal("query-string submission saved a connection")
+			}
+		})
+	}
+	t.Run("query cannot select the connection that receives the token", func(t *testing.T) {
+		app := appFixture(t, false)
+		saved := model.Connection{ID: "imported", Name: "Synthetic restored connection", Provider: "github", BaseURL: "https://github.com", ReconnectRequired: true}
+		if err := app.Engine.Store.SaveConnection(saved); err != nil {
+			t.Fatal(err)
+		}
+		app.Engine.Factory = func(model.Connection, string) (provider.Provider, error) { return connectionProvider{}, nil }
+		body := url.Values{"csrf": {app.csrf}, "name": {"Synthetic account"}, "provider": {"github"}, "base_url": {"https://github.com"}, "token": {token}}
+		if r := request(app, "POST", "/connections?connection_id=imported", body, nil); r.Code != 303 {
+			t.Fatalf("new connection was not accepted: %d", r.Code)
+		}
+		stored, err := app.Engine.Store.Connection(saved.ID)
+		if err != nil || !stored.ReconnectRequired {
+			t.Fatal("query-string connection ID reconnected the saved connection")
+		}
+		if _, err = app.Engine.Secrets.Get(saved.ID); err == nil {
+			t.Fatal("query-string connection ID received the token")
+		}
+	})
+}
+
 func TestReconnectRejectsRecipientDifferentFromDisplayedForm(t *testing.T) {
 	for _, tc := range []struct {
 		name, savedProvider, savedBase, provider, base string

@@ -440,17 +440,18 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/connections", "error", "Provision headless credentials outside the browser application.")
 		return
 	}
-	name := strings.TrimSpace(r.FormValue("name"))
+	// Read only the POST body: credentials and their recipient never come from the URL.
+	name := strings.TrimSpace(r.PostForm.Get("name"))
 	if name == "" || len(name) > 100 {
 		s.redirect(w, r, "/connections", "error", "Provide a connection name of up to 100 characters.")
 		return
 	}
-	base, err := provider.ValidateBase(r.FormValue("base_url"))
+	base, err := provider.ValidateBase(r.PostForm.Get("base_url"))
 	if err != nil {
 		s.redirect(w, r, "/connections", "error", err.Error())
 		return
 	}
-	c := model.Connection{ID: r.FormValue("connection_id"), Name: name, Provider: r.FormValue("provider"), BaseURL: base}
+	c := model.Connection{ID: r.PostForm.Get("connection_id"), Name: name, Provider: r.PostForm.Get("provider"), BaseURL: base}
 	if c.ID != "" {
 		old, e := s.Engine.Store.Connection(c.ID)
 		if e != nil {
@@ -465,7 +466,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		c = old
 		c.Name = name
 	}
-	token := strings.TrimSpace(r.FormValue("token"))
+	token := strings.TrimSpace(r.PostForm.Get("token"))
 	if token == "" || len(token) > 16384 {
 		s.redirect(w, r, "/connections", "error", "Enter a provider access token.")
 		return
