@@ -1,4 +1,4 @@
-.PHONY: help build run demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check docker-up
+.PHONY: help build run start stop status demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check docker-up
 
 # Keep TLS behavior consistent across local, CI, and release builds.
 export GOTOOLCHAIN := go1.26.10
@@ -18,6 +18,15 @@ build: ## Build bin/my-code-dashboard with the pinned Go toolchain
 
 run: build ## Build and start the dashboard, opening it in the browser (extra flags: ARGS=...)
 	./bin/my-code-dashboard --open $(ARGS)
+
+start: build ## Build and start the dashboard in the background, then open it
+	bash scripts/dashboard.sh start --open
+
+stop: ## Stop the background dashboard
+	bash scripts/dashboard.sh stop
+
+status: ## Show whether the dashboard is running
+	@bash scripts/dashboard.sh status || true
 
 demo: build ## Build and open the synthetic demo (no credentials or provider calls)
 	./bin/my-code-dashboard --demo --open

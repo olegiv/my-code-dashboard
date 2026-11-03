@@ -69,6 +69,7 @@ internal/web/server_test.go
 internal/web/templates/pages.html
 internal/web/templates/shell.html
 scripts/browser-assets.sha256
+scripts/dashboard.sh
 scripts/docker-check.sh
 scripts/docker-up.sh
 scripts/gate/gate_test.go

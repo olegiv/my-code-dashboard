@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- On macOS, `make start`, `make stop` and `make status` run the dashboard in the background, stop it and report whether it is running, through the new `scripts/dashboard.sh`. A loaded start-at-login agent is started or unloaded with `launchctl` instead of being killed.
+
 ### Fixed
 
 - `make test`, `make check` and plain `go test ./...`, `go vet ./...` and `govulncheck ./...` no longer fail in a working checkout that keeps scratch Go files in the ignored `output/` directory. `go.mod` now ignores `./output`.
