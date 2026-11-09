@@ -8,7 +8,7 @@ ignore ./output
 
 require (
 	github.com/zalando/go-keyring v0.2.8
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
