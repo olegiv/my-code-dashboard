@@ -1,7 +1,7 @@
 # Optional container image for a trusted single-user host. See docs/docker.md.
 # Keep the Go selection consistent with go.mod, Makefile, workflows and the release script.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-trixie@sha256:909771fef53e3dcb0950255f0c9a8b4728c3b841e61509c7b29b098de7ee02d4 AS build
-ENV GOTOOLCHAIN=go1.26.10 CGO_ENABLED=0
+FROM --platform=$BUILDPLATFORM golang:1.26.11-trixie@sha256:fa340cb59ebeb1d53ac1cccfc334201d938fe5f3458003cccb767096d8e032b8 AS build
+ENV GOTOOLCHAIN=go1.26.11 CGO_ENABLED=0
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify

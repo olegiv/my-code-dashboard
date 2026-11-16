@@ -1,6 +1,6 @@
-# Why the project uses Go 1.26.10
+# Why the project uses Go 1.26.11
 
-Decision reviewed on **24 October 2026**. Go **1.26.10** is the module minimum and the pinned build toolchain for this project. Go **1.17** cannot build the current application and is outside upstream support. Go **1.27** is a separate comparison: an executable built with that release family encountered a TLS handshake timeout against a self-managed GitLab instance during local troubleshooting. Rebuilding with 1.26.9 restored the connection without bypassing certificate verification. Go 1.26.10 replaced 1.26.9 as the pin to fix the `crypto/x509` advisory GO-2026-6809.
+Decision reviewed on **24 October 2026**. Go **1.26.11** is the module minimum and the pinned build toolchain for this project. Go **1.17** cannot build the current application and is outside upstream support. Go **1.27** is a separate comparison: an executable built with that release family encountered a TLS handshake timeout against a self-managed GitLab instance during local troubleshooting. Rebuilding with 1.26.9 restored the connection without bypassing certificate verification. Go 1.26.10 replaced 1.26.9 as the pin to fix the `crypto/x509` advisory GO-2026-6809.
 
 ## Version comparison
 
@@ -22,7 +22,7 @@ There are also concrete build barriers in this checkout:
 - `internal/store/store.go` and `internal/provider/provider.go` use generic functions and `any`, which arrived after Go 1.17. [Go 1.18 language changes](https://go.dev/doc/go1.18#language).
 - `internal/web/server.go` uses `slices` and the `min`/`max` built-ins, introduced in Go 1.21. [Go 1.21 release notes](https://go.dev/doc/go1.21).
 - The web boundary uses `http.NewCrossOriginProtection`, added in Go 1.25. [Standard library API](https://pkg.go.dev/net/http#NewCrossOriginProtection).
-- `go.mod` declares `go 1.26.10`, enforcing the patched project baseline. The selected `modernc.org/sqlite v1.60.1`, `modernc.org/libc v1.77.1`, and `golang.org/x/sys v0.49.0` modules declare Go 1.26.0. The application deliberately requires a later patch than those dependency minimums. These requirements were checked from the actual module graph, rather than inferred from dependency names.
+- `go.mod` declares `go 1.26.11`, enforcing the patched project baseline. The selected `modernc.org/sqlite v1.60.1`, `modernc.org/libc v1.77.1`, and `golang.org/x/sys v0.49.0` modules declare Go 1.26.0. The application deliberately requires a later patch than those dependency minimums. These requirements were checked from the actual module graph, rather than inferred from dependency names.
 
 Changing the version number in `go.mod` would not backport the language features, standard library, or dependencies. Go's compatibility promise primarily lets newer toolchains build older compatible programs; it does not make old compilers understand newer programs. [Go compatibility policy](https://go.dev/doc/go1compat).
 
@@ -46,31 +46,31 @@ The workaround is therefore a supported, patched, tested compiler selection. The
 
 | Location | Effect |
 | --- | --- |
-| `go.mod`: `go 1.26.10` | Rejects older compilers; automatic selection may obtain a sufficiently new toolchain. |
-| `Makefile`: `GOTOOLCHAIN=go1.26.10` | Selects the exact toolchain for build, tests, and checks. |
-| `scripts/release.sh` | Explicitly selects 1.26.10 for local and CI archive builds. |
-| `.github/workflows/ci.yml`, `codeql.yml`, `quality.yml` and `release.yml` | Install and explicitly select 1.26.10. |
-| `Dockerfile` | Builds the optional image from the digest-pinned `golang:1.26.10` image with `GOTOOLCHAIN=go1.26.10`; `make docker-check` verifies the embedded compiler. Dependabot ignores `golang` image updates. |
+| `go.mod`: `go 1.26.11` | Rejects older compilers; automatic selection may obtain a sufficiently new toolchain. |
+| `Makefile`: `GOTOOLCHAIN=go1.26.11` | Selects the exact toolchain for build, tests, and checks. |
+| `scripts/release.sh` | Explicitly selects 1.26.11 for local and CI archive builds. |
+| `.github/workflows/ci.yml`, `codeql.yml`, `quality.yml` and `release.yml` | Install and explicitly select 1.26.11. |
+| `Dockerfile` | Builds the optional image from the digest-pinned `golang:1.26.11` image with `GOTOOLCHAIN=go1.26.11`; `make docker-check` verifies the embedded compiler. Dependabot ignores `golang` image updates. |
 | `scripts/gate/toolchain_test.go` | Fails `make test` when a build file selects a different version than `go.mod` or a Dockerfile base image lacks a digest. Documentation is reviewed manually. |
-| Direct commands and GoLand | Must explicitly select 1.26.10 too. |
+| Direct commands and GoLand | Must explicitly select 1.26.11 too. |
 
-The minimum is not an exact lock: with automatic selection, a newer installed Go can remain selected. A separate `toolchain go1.26.10` line would be redundant with this minimum and is omitted by Go's module tooling; it would not force a downgrade either. `GOTOOLCHAIN=go1.26.10`, without `+auto`, selects that exact toolchain, downloading and verifying it if necessary. With automatic selection disabled, an older compiler rejects the module. Go 1.17 predates this mechanism; install 1.26.10 directly or use a Go 1.21+ launcher. [Official toolchain selection documentation](https://go.dev/doc/toolchain).
+The minimum is not an exact lock: with automatic selection, a newer installed Go can remain selected. A separate `toolchain go1.26.11` line would be redundant with this minimum and is omitted by Go's module tooling; it would not force a downgrade either. `GOTOOLCHAIN=go1.26.11`, without `+auto`, selects that exact toolchain, downloading and verifying it if necessary. With automatic selection disabled, an older compiler rejects the module. Go 1.17 predates this mechanism; install 1.26.11 directly or use a Go 1.21+ launcher. [Official toolchain selection documentation](https://go.dev/doc/toolchain).
 
 Verify the selected compiler and the compiler embedded in the executable separately:
 
 ```sh
 GOTOOLCHAIN=local go version
-GOTOOLCHAIN=go1.26.10 go version
+GOTOOLCHAIN=go1.26.11 go version
 make build
-GOTOOLCHAIN=go1.26.10 go version -m bin/my-code-dashboard
+GOTOOLCHAIN=go1.26.11 go version -m bin/my-code-dashboard
 ```
 
-The second command and the executable's build metadata should report `go1.26.10`. In GoLand, select the 1.26.10 project SDK and set `GOTOOLCHAIN=go1.26.10` in direct Go run/test configurations. A prebuilt application needs no Go installation; upgrading the Go installed on a Mac does not change an already built binary. Updating the runtime requires rebuilding and replacing that binary.
+The second command and the executable's build metadata should report `go1.26.11`. In GoLand, select the 1.26.11 project SDK and set `GOTOOLCHAIN=go1.26.11` in direct Go run/test configurations. A prebuilt application needs no Go installation; upgrading the Go installed on a Mac does not change an already built binary. Updating the runtime requires rebuilding and replacing that binary.
 
 The module requirements can be inspected without using credentials or contacting provider APIs:
 
 ```sh
-GOTOOLCHAIN=go1.26.10 go list -m -f '{{.Path}} {{.Version}} go={{.GoVersion}}' all
+GOTOOLCHAIN=go1.26.11 go list -m -f '{{.Path}} {{.Version}} go={{.GoVersion}}' all
 ```
 
 ## Updating or removing the pin
