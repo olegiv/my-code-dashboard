@@ -5,7 +5,7 @@
 # synthetic TLS provider on an internal network: no real credentials, no real
 # provider calls, and nothing is pushed.
 set -euo pipefail
-export GOTOOLCHAIN=go1.26.10
+export GOTOOLCHAIN=go1.26.11
 cd "$(git rev-parse --show-toplevel)"
 image=my-code-dashboard:check
 container="my-code-dashboard-check-$$"
@@ -57,10 +57,10 @@ docker cp "$container:/usr/local/bin/my-code-dashboard" "$work/my-code-dashboard
 docker cp "$container:/usr/share/doc/my-code-dashboard/THIRD_PARTY_LICENSES.txt" "$work/licenses.txt"
 docker rm "$container" >/dev/null
 go version -m "$work/my-code-dashboard" > "$work/buildinfo"
-head -n 1 "$work/buildinfo" | grep -q ': go1\.26\.10$' || fail 'Image binary was not built with Go 1.26.10.'
+head -n 1 "$work/buildinfo" | grep -q ': go1\.26\.11$' || fail 'Image binary was not built with Go 1.26.11.'
 grep -q -E '^[[:space:]]+build[[:space:]]+CGO_ENABLED=0$' "$work/buildinfo" || fail 'Image binary was built with CGO enabled.'
 grep -q -E '^[[:space:]]+build[[:space:]]+GOOS=linux$' "$work/buildinfo" || fail 'Image binary does not target Linux.'
-grep -q 'Go go1.26.10 / LICENSE' "$work/licenses.txt" || fail 'Image notices are missing the Go license.'
+grep -q 'Go go1.26.11 / LICENSE' "$work/licenses.txt" || fail 'Image notices are missing the Go license.'
 
 # The container must not weaken the loopback-only listener rule.
 if output="$(docker run --rm --network none "$image" serve --addr 0.0.0.0:7364 2>&1)"; then

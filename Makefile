@@ -1,7 +1,7 @@
 .PHONY: help build run start stop status demo test lint check test-gate commit-check pr-check package-check install-test-gate release docker-build docker-check docker-up
 
 # Keep TLS behavior consistent across local, CI, and release builds.
-export GOTOOLCHAIN := go1.26.10
+export GOTOOLCHAIN := go1.26.11
 
 # Development builds append the commit, plus -dirty for uncommitted tracked
 # changes; release builds and checkouts without Git print the plain version.

@@ -4,7 +4,7 @@ Original application code is GPL-3.0-only. The components below retain their ori
 
 | Component | Version | License / retained notice |
 | --- | --- | --- |
-| Go standard library | Go 1.26.10 build toolchain | BSD-3-Clause |
+| Go standard library | Go 1.26.11 build toolchain | BSD-3-Clause |
 | modernc.org/sqlite | v1.60.1 | BSD-3-Clause; embedded SQLite public-domain code, sqlite-vec MIT, and other notices supplied by the module |
 | github.com/zalando/go-keyring | v0.2.8 | Apache-2.0 |
 | HTMX + Alpine compatibility extension | 4.0.0 | BSD-0-Clause; `internal/web/assets/vendor/HTMX-LICENSE` |
@@ -23,6 +23,6 @@ Pinned browser downloads and SHA-256:
 
 Generated notice files stay in release archives under ignored `dist/`; there is no checked-in license inventory or generated license directory. The separate corresponding-source archive uses `go mod vendor` to retain dependency source and its upstream license metadata, and includes the browser license files beside their assets. Review notices when dependencies or embedded code change; automated selection does not determine license compatibility. Packaging does not publish artifacts.
 
-The optional container image is built from `golang:1.26.10-trixie` (`sha256:909771fef53e3dcb0950255f0c9a8b4728c3b841e61509c7b29b098de7ee02d4`), which is used only for compilation and is not distributed in the image. Its runtime base is `gcr.io/distroless/static-debian13:nonroot` (`sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99`), both checked 2026-10-24. The base image's Debian packages keep their notices under `/usr/share/doc`; the application's license, these notices and the generated `THIRD_PARTY_LICENSES.txt` are in `/usr/share/doc/my-code-dashboard/`. See [the container guide](docs/docker.md).
+The optional container image is built from `golang:1.26.11-trixie` (`sha256:fa340cb59ebeb1d53ac1cccfc334201d938fe5f3458003cccb767096d8e032b8`), which is used only for compilation and is not distributed in the image. Its runtime base is `gcr.io/distroless/static-debian13:nonroot` (`sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99`), both checked 2026-10-24. The base image's Debian packages keep their notices under `/usr/share/doc`; the application's license, these notices and the generated `THIRD_PARTY_LICENSES.txt` are in `/usr/share/doc/my-code-dashboard/`. See [the container guide](docs/docker.md).
 
 The prepared GitHub workflows pin official `actions/checkout` v7.0.1, `actions/setup-go` v7.0.0, and `actions/upload-artifact` v7.0.2 to verified commit SHAs (checked 2026-10-18). Those hosted CI actions are infrastructure and do not add a Node.js requirement to this Go application's build or runtime. Browser scripts are maintained directly; there is no npm package manifest or frontend build step.

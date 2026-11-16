@@ -1,6 +1,6 @@
 module github.com/olegiv/my-code-dashboard
 
-go 1.26.10
+go 1.26.11
 
 // Review evidence in the ignored output/ directory can include scratch Go
 // files; keep them out of ./... so tests, vet and govulncheck still load.
